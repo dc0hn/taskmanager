@@ -58,9 +58,10 @@ export default {
         glow: '0 0 0 1px rgba(139,92,246,0.45), 0 8px 32px rgba(139,92,246,0.30)',
       },
       borderRadius: {
-        xl2: '16px',
-        xl3: '22px',
-        xl4: '28px',
+        xl2: '20px',
+        xl3: '28px',
+        xl4: '36px',
+        xl5: '44px',
       },
       backgroundImage: {
         'gradient-radial':

@@ -96,10 +96,10 @@ export default function IntakePanel({
   }
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div className="flex flex-col gap-5 flex-1 min-h-0">
       <motion.div
         layout
-        className="relative bg-bg-1/80 glass border border-line-1 rounded-xl3 shadow-soft p-4 overflow-hidden"
+        className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 overflow-hidden shrink-0"
       >
         <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-cat-deep/15 blur-3xl pointer-events-none" />
         <div className="relative flex items-center justify-between mb-3">
@@ -129,13 +129,13 @@ export default function IntakePanel({
         </div>
       </motion.div>
 
-      <div className="bg-bg-1/80 glass border border-line-1 rounded-xl3 shadow-soft p-4 flex-1 overflow-hidden flex flex-col min-h-0">
-        <div className="flex items-center justify-between mb-3">
+      <div className="bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 flex flex-col flex-1 min-h-[160px]">
+        <div className="flex items-center justify-between mb-3 shrink-0">
           <h2 className="text-[11px] uppercase tracking-[0.14em] text-fg-4 font-medium">
             Unscheduled <span className="text-fg-5 font-normal normal-case tracking-normal">· {tasks.length}</span>
           </h2>
         </div>
-        <div className="flex-1 overflow-y-auto no-scrollbar -mx-1 px-1">
+        <div className="overflow-y-auto no-scrollbar -mx-1 px-1 flex-1 min-h-0">
           {tasks.length === 0 ? (
             <motion.p
               initial={{ opacity: 0 }}
@@ -231,7 +231,7 @@ export default function IntakePanel({
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
-            className="bg-rose-500/10 border border-rose-500/30 rounded-xl2 p-3"
+            className="bg-rose-500/10 border border-rose-500/30 rounded-xl3 p-3.5"
           >
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-xs font-medium text-rose-300">
@@ -327,7 +327,7 @@ function TaskEditor({
             <button
               key={d}
               onClick={() => onChange({ duration: d })}
-              className={`text-[11px] px-2 py-1 rounded-md tnum transition-all ${
+              className={`text-[11px] px-2.5 py-1 rounded-full tnum transition-all ${
                 task.duration === d
                   ? 'bg-white text-bg-0 shadow'
                   : 'bg-white/5 text-fg-2 hover:bg-white/10'
@@ -349,7 +349,7 @@ function TaskEditor({
               <button
                 key={c.id}
                 onClick={() => onChange({ category: c.id })}
-                className={`text-[11px] px-2 py-1 rounded-md inline-flex items-center gap-1 transition-all border`}
+                className={`text-[11px] px-2.5 py-1 rounded-full inline-flex items-center gap-1 transition-all border`}
                 style={{
                   background: active ? c.bg : 'rgba(255,255,255,0.03)',
                   borderColor: active ? c.accent : 'rgba(255,255,255,0.08)',

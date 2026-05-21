@@ -19,7 +19,7 @@ export default function SummaryCard({ blocks }: Props) {
   return (
     <motion.div
       layout
-      className="relative bg-bg-1/80 glass border border-line-1 rounded-xl3 shadow-soft p-4 overflow-hidden"
+      className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 overflow-hidden"
     >
       <div className="absolute -bottom-20 -right-12 w-40 h-40 rounded-full bg-cat-admin/10 blur-3xl pointer-events-none" />
       <div className="relative flex items-center justify-between mb-3">

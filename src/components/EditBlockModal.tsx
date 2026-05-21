@@ -7,12 +7,13 @@ import { minutesTo24h, parse24h } from '../utils/time';
 
 interface Props {
   block: Block | null;
+  otherBlocks: Block[];
   onClose: () => void;
   onSave: (patch: Partial<Block>) => void;
   onDelete: () => void;
 }
 
-export default function EditBlockModal({ block, onClose, onSave, onDelete }: Props) {
+export default function EditBlockModal({ block, otherBlocks, onClose, onSave, onDelete }: Props) {
   const [title, setTitle] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -48,6 +49,11 @@ export default function EditBlockModal({ block, onClose, onSave, onDelete }: Pro
       setError('End time must be after start time.');
       return;
     }
+    const conflict = otherBlocks.find((b) => !(e <= b.start || s >= b.end));
+    if (conflict) {
+      setError(`Overlaps "${conflict.title}".`);
+      return;
+    }
     onSave({ title: title.trim() || 'Untitled', start: s, end: e, category });
   }
 
@@ -71,7 +77,7 @@ export default function EditBlockModal({ block, onClose, onSave, onDelete }: Pro
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 10, opacity: 0, scale: 0.98 }}
             transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-            className="relative bg-bg-2 border border-line-2 shadow-lift rounded-xl3 w-full max-w-md p-5 overflow-hidden"
+            className="relative bg-bg-2 border border-line-2 shadow-lift rounded-xl5 w-full max-w-md p-6 overflow-hidden"
           >
             <div className="absolute -top-20 -right-20 w-48 h-48 rounded-full bg-cat-deep/20 blur-3xl pointer-events-none" />
             <div className="relative flex items-center justify-between mb-4">
@@ -132,7 +138,7 @@ export default function EditBlockModal({ block, onClose, onSave, onDelete }: Pro
                       <button
                         key={c.id}
                         onClick={() => setCategory(c.id)}
-                        className="text-xs px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 border transition-all"
+                        className="text-xs px-3 py-1.5 rounded-full inline-flex items-center gap-1.5 border transition-all"
                         style={{
                           background: active ? c.bg : 'rgba(255,255,255,0.03)',
                           borderColor: active ? c.accent : 'rgba(255,255,255,0.08)',
@@ -182,7 +188,7 @@ export default function EditBlockModal({ block, onClose, onSave, onDelete }: Pro
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={save}
-                  className="text-xs font-semibold text-white px-3.5 py-1.5 rounded-lg shadow-glow"
+                  className="text-xs font-semibold text-white px-4 py-1.5 rounded-full shadow-glow"
                   style={{
                     backgroundImage:
                       'linear-gradient(135deg, #7c3aed 0%, #6366f1 50%, #22d3ee 100%)',

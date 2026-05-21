@@ -55,20 +55,54 @@ export default function App() {
 
   function handleBuildDay() {
     if (plan.tasks.length === 0) return;
-    const anchoredTasks: Task[] = plan.blocks.map((b) => ({
-      id: b.id,
-      title: b.title,
-      duration: b.end - b.start,
-      category: b.category,
-      fixedTime: b.start,
-      priority: 'normal',
-    }));
+
+    const intakeFixed = plan.tasks.filter((t) => t.fixedTime != null);
+    const intakeFlex = plan.tasks.filter((t) => t.fixedTime == null);
+
+    // Fixed-time intake tasks always win their slot. Existing blocks overlapping
+    // those slots get rescheduled as flexible instead of being lost.
+    const conflictsWithIntake = (start: number, end: number) =>
+      intakeFixed.some((t) => {
+        const fs = t.fixedTime!;
+        const fe = fs + t.duration;
+        return !(fe <= start || fs >= end);
+      });
+
+    // Auto-breaks are scheduler-owned; drop them and let the new build recompute.
+    const existing = plan.blocks.filter((b) => !b.auto);
+    const keptAnchors: Task[] = existing
+      .filter((b) => !conflictsWithIntake(b.start, b.end))
+      .map((b) => ({
+        id: b.id,
+        title: b.title,
+        duration: b.end - b.start,
+        category: b.category,
+        fixedTime: b.start,
+        priority: 'normal',
+      }));
+    const displacedAsFlex: Task[] = existing
+      .filter((b) => conflictsWithIntake(b.start, b.end))
+      .map((b) => ({
+        id: b.id,
+        title: b.title,
+        duration: b.end - b.start,
+        category: b.category,
+        priority: 'normal',
+      }));
+
     const result = buildSchedule(
-      [...anchoredTasks, ...plan.tasks],
+      [...intakeFixed, ...keptAnchors, ...displacedAsFlex, ...intakeFlex],
       settings.workingStart,
       settings.workingEnd
     );
-    setPlan((p) => ({ ...p, blocks: result.blocks, tasks: [] }));
+
+    // Preserve completion state across a rebuild (the scheduler now keeps task ids).
+    const completed = new Set(plan.blocks.filter((b) => b.completed).map((b) => b.id));
+    const finalBlocks: Block[] = result.blocks.map((b) =>
+      completed.has(b.id) ? { ...b, completed: true } : b
+    );
+
+    setPlan((p) => ({ ...p, blocks: finalBlocks, tasks: [] }));
     setOverflow(result.overflow);
     setBuildPulse((n) => n + 1);
   }
@@ -114,7 +148,7 @@ export default function App() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: [0.2, 0.8, 0.2, 1] }}
-        className="max-w-[1320px] mx-auto p-4 lg:p-6 flex flex-col gap-4 h-screen"
+        className="max-w-[1320px] mx-auto p-4 lg:p-6 flex flex-col gap-5"
       >
         <Header
           date={date}
@@ -123,7 +157,7 @@ export default function App() {
           onChangeSettings={setSettings}
           onCopyYesterday={handleCopyYesterday}
         />
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-4 flex-1 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-5 items-stretch">
           <Timeline
             blocks={plan.blocks}
             workingStart={settings.workingStart}
@@ -135,7 +169,7 @@ export default function App() {
             onCreateBlock={handleCreateBlock}
             onToggleComplete={handleToggleComplete}
           />
-          <div className="flex flex-col gap-4 min-h-0">
+          <div className="flex flex-col gap-5 h-full min-h-0">
             <ProgressWheel blocks={plan.blocks} />
             <IntakePanel
               tasks={plan.tasks}
@@ -153,6 +187,7 @@ export default function App() {
 
       <EditBlockModal
         block={editingBlock}
+        otherBlocks={plan.blocks.filter((b) => b.id !== editingId)}
         onClose={() => setEditingId(null)}
         onSave={(patch) => {
           if (!editingBlock) return;

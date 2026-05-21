@@ -188,9 +188,9 @@ export default function Timeline({
   const showNow = isToday && nowMin >= visibleStart && nowMin <= visibleEnd;
 
   return (
-    <div className="relative bg-bg-1/80 glass border border-line-1 rounded-xl3 shadow-soft p-4 h-full overflow-hidden flex flex-col min-h-0">
+    <div className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 h-full min-h-[640px] overflow-hidden flex flex-col">
       <div className="absolute -top-24 -left-24 w-72 h-72 rounded-full bg-cat-deep/10 blur-3xl pointer-events-none" />
-      <div className="relative flex items-center justify-between mb-3">
+      <div className="relative flex items-center justify-between mb-3 px-1">
         <div className="flex items-center gap-2">
           <h2 className="text-[11px] uppercase tracking-[0.14em] text-fg-4 font-medium">
             Today's plan

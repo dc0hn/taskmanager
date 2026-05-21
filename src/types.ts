@@ -23,6 +23,7 @@ export interface Block {
   end: number; // minutes since midnight
   category: Category;
   completed?: boolean;
+  auto?: boolean; // true for synthetic blocks added by the scheduler (e.g. auto breaks)
 }
 
 export interface DayPlan {

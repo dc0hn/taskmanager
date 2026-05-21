@@ -39,7 +39,7 @@ export default function Header({
   }
 
   return (
-    <header className="relative flex items-center justify-between gap-4 px-5 py-3.5 bg-bg-1/80 glass shadow-soft rounded-xl3 border border-line-1 overflow-hidden">
+    <header className="relative flex items-center justify-between gap-4 px-5 py-3.5 bg-bg-1/80 glass shadow-soft rounded-xl5 border border-line-1 overflow-hidden">
       <div className="absolute inset-0 pointer-events-none opacity-60 bg-grid-fade" />
       <div className="relative flex items-center gap-3 min-w-0">
         <motion.div

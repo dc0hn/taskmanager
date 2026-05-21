@@ -70,7 +70,7 @@ export default function ProgressWheel({ blocks }: Props) {
   return (
     <motion.div
       layout
-      className="relative bg-bg-1/80 glass border border-line-1 rounded-xl3 shadow-soft p-4 overflow-hidden"
+      className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 overflow-hidden"
     >
       <div className="absolute -top-20 -left-12 w-44 h-44 rounded-full bg-cat-deep/15 blur-3xl pointer-events-none" />
       <div className="absolute -bottom-16 -right-12 w-44 h-44 rounded-full bg-cat-admin/10 blur-3xl pointer-events-none" />

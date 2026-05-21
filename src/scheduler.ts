@@ -5,6 +5,13 @@ interface Interval {
   end: number;
 }
 
+const BREAK_AFTER_MIN = 90;
+const BREAK_LEN = 15;
+
+function uid(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
 function categoryRank(c: Category): number {
   // Lower = scheduled earlier when priority ties
   return { deep: 0, admin: 1, other: 2, break: 3 }[c];
@@ -35,15 +42,19 @@ function subtractInterval(intervals: Interval[], start: number, end: number): In
   return out.filter((i) => i.end > i.start);
 }
 
-function uid(): string {
-  return Math.random().toString(36).slice(2, 10);
-}
-
 export interface ScheduleResult {
   blocks: Block[];
   overflow: Task[];
 }
 
+// Places only the tasks the caller supplies. Fixed-time tasks become anchors
+// at their exact time; flexible tasks pack back-to-back into the gaps in
+// chronological order. After ~90 minutes of cumulative work the scheduler
+// will slot a 15-minute auto-break between two flex tasks, but ONLY if:
+//   - the break fits inside the current free interval (no overlap with any
+//     fixed-time task — those override the auto-break), AND
+//   - there is still at least one more flex task waiting that fits after the
+//     break (so breaks never trail at the end and never sit beside nothing).
 export function buildSchedule(
   tasks: Task[],
   workingStart: number,
@@ -55,98 +66,64 @@ export function buildSchedule(
 
   let free: Interval[] = [{ start: workingStart, end: workingEnd }];
   const anchors: Block[] = [];
-
-  // 1) Fixed-time tasks become anchors
-  const fixed = tasks.filter((t) => t.fixedTime != null);
-  const flexible = tasks.filter((t) => t.fixedTime == null);
   const overflow: Task[] = [];
 
-  // Sort fixed by start
-  fixed.sort((a, b) => (a.fixedTime! - b.fixedTime!));
+  const fixed = tasks
+    .filter((t) => t.fixedTime != null)
+    .sort((a, b) => a.fixedTime! - b.fixedTime!);
+  const flexible = tasks.filter((t) => t.fixedTime == null);
 
   for (const t of fixed) {
     const s = t.fixedTime!;
     const e = s + t.duration;
-    // If completely outside working window, still place it (user asked) — extend visible.
-    // Track overlap with existing anchors: if overlaps, push later to avoid double-booking? Spec says never double-book.
     const conflicts = anchors.some((a) => !(e <= a.start || s >= a.end));
     if (conflicts) {
       overflow.push(t);
       continue;
     }
-    anchors.push({ id: uid(), title: t.title, start: s, end: e, category: t.category });
+    anchors.push({ id: t.id, title: t.title, start: s, end: e, category: t.category });
     free = subtractInterval(free, s, e);
   }
 
-  // 2) Try to place a lunch anchor at noon if no break already there and it fits.
-  const hasLunchAlready = anchors.some(
-    (a) => a.category === 'break' && a.start <= 12 * 60 && a.end >= 12 * 60
-  );
-  if (!hasLunchAlready) {
-    const lunchStart = 12 * 60;
-    const lunchEnd = 13 * 60;
-    if (lunchStart >= workingStart && lunchEnd <= workingEnd) {
-      const fits = free.some((iv) => iv.start <= lunchStart && iv.end >= lunchEnd);
-      if (fits) {
-        anchors.push({
-          id: uid(),
-          title: 'Lunch',
-          start: lunchStart,
-          end: lunchEnd,
-          category: 'break',
-        });
-        free = subtractInterval(free, lunchStart, lunchEnd);
-      }
-    }
-  }
-
-  // 3) Fill flexible tasks into free intervals
   const queue = sortForFill(flexible);
   const placed: Block[] = [];
-  // Sort free intervals chronologically
   free.sort((a, b) => a.start - b.start);
 
-  // Place across intervals in order
   for (const iv of free) {
     let cursor = iv.start;
     let workSinceBreak = 0;
 
     while (cursor < iv.end && queue.length > 0) {
-      // Insert auto break if needed before next work task
-      if (workSinceBreak >= 90) {
-        const breakLen = Math.min(15, iv.end - cursor);
-        if (breakLen >= 5) {
+      // Time for an auto-break?
+      if (workSinceBreak >= BREAK_AFTER_MIN) {
+        const breakEnd = cursor + BREAK_LEN;
+        const followUpFits =
+          breakEnd <= iv.end &&
+          queue.some((t) => t.duration <= iv.end - breakEnd);
+        if (followUpFits) {
           placed.push({
             id: uid(),
-            title: 'Short break',
+            title: 'Break',
             start: cursor,
-            end: cursor + breakLen,
+            end: breakEnd,
             category: 'break',
+            auto: true,
           });
-          cursor += breakLen;
+          cursor = breakEnd;
           workSinceBreak = 0;
           continue;
-        } else {
-          break;
         }
+        // No room for break+follow-up before the next fixed-time anchor —
+        // the fixed-time task overrides. Skip the break and keep working.
+        workSinceBreak = 0;
       }
 
-      // Find first task that fits
-      let idx = -1;
-      for (let i = 0; i < queue.length; i++) {
-        const remain = iv.end - cursor;
-        if (queue[i].duration <= remain) {
-          idx = i;
-          break;
-        }
-      }
-      if (idx === -1) {
-        // No remaining task fits in this slot — move on
-        break;
-      }
+      const remain = iv.end - cursor;
+      const idx = queue.findIndex((t) => t.duration <= remain);
+      if (idx === -1) break;
       const t = queue.splice(idx, 1)[0];
       placed.push({
-        id: uid(),
+        id: t.id,
         title: t.title,
         start: cursor,
         end: cursor + t.duration,
@@ -161,7 +138,6 @@ export function buildSchedule(
     }
   }
 
-  // Anything left in queue is overflow
   for (const t of queue) overflow.push(t);
 
   const allBlocks = [...anchors, ...placed].sort((a, b) => a.start - b.start);
