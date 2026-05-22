@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "framer-motion": "^12.40.0",
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

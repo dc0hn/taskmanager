@@ -4,84 +4,110 @@ export default {
   theme: {
     extend: {
       fontFamily: {
+        // Utility UI: clean sans for buttons, labels, controls.
         sans: [
-          'Inter',
+          '"Inter"',
           'ui-sans-serif',
           'system-ui',
           '-apple-system',
           'BlinkMacSystemFont',
-          'Segoe UI',
+          '"Segoe UI"',
           'Roboto',
           'sans-serif',
         ],
+        // Editorial display: titles, headings, body when we want voice.
+        display: [
+          '"Fraunces"',
+          'ui-serif',
+          'Georgia',
+          'Cambria',
+          '"Times New Roman"',
+          'Times',
+          'serif',
+        ],
+        serif: [
+          '"Fraunces"',
+          'ui-serif',
+          'Georgia',
+          'Cambria',
+          '"Times New Roman"',
+          'Times',
+          'serif',
+        ],
+        mono: [
+          '"JetBrains Mono"',
+          'ui-monospace',
+          'SFMono-Regular',
+          'Menlo',
+          'Consolas',
+          'monospace',
+        ],
       },
       colors: {
-        // Surfaces
-        bg: {
-          0: '#08090d',
-          1: '#0d0f15',
-          2: '#13161f',
-          3: '#1a1e2a',
+        // Surfaces (warm parchment — softer)
+        paper: {
+          0: '#ede5d2',
+          1: '#f2ead8',
+          2: '#f7f0de',
+          3: '#fbf6e8',
+          4: '#fefbf1',
         },
-        line: {
-          1: 'rgba(255,255,255,0.06)',
-          2: 'rgba(255,255,255,0.10)',
-          3: 'rgba(255,255,255,0.18)',
+        ink: {
+          0: '#231a0e',
+          1: '#322516',
+          2: '#473722',
+          3: '#574627', // contrast ≈ 6.4:1 on parchment (was #7a6644 ≈ 3.7)
+          4: '#6e5b3a', // contrast ≈ 4.7:1 on parchment (was #a59076 ≈ 2.4)
+          5: '#c8b693', // decoration only
         },
-        fg: {
-          0: '#f8fafc',
-          1: '#e5e7eb',
-          2: '#cbd5e1',
-          3: '#94a3b8',
-          4: '#64748b',
-          5: '#475569',
+        rule: {
+          1: 'rgba(50,37,22,0.07)',
+          2: 'rgba(50,37,22,0.12)',
+          3: 'rgba(50,37,22,0.20)',
+          4: 'rgba(50,37,22,0.38)',
         },
-        // Category accents (vibrant but tuned for dark)
+        // Editorial category accents (slightly softened)
         cat: {
-          deep: '#8b5cf6',
-          deepGlow: 'rgba(139,92,246,0.35)',
-          admin: '#22d3ee',
-          adminGlow: 'rgba(34,211,238,0.35)',
-          break: '#f59e0b',
-          breakGlow: 'rgba(245,158,11,0.35)',
-          other: '#94a3b8',
-          otherGlow: 'rgba(148,163,184,0.30)',
+          deep: '#7e3a3e',
+          deepSoft: 'rgba(126,58,62,0.10)',
+          admin: '#2b4a6b',
+          adminSoft: 'rgba(43,74,107,0.10)',
+          break: '#b18133',
+          breakSoft: 'rgba(177,129,51,0.12)',
+          other: '#574a3a',
+          otherSoft: 'rgba(87,74,58,0.08)',
         },
-        rose: {
-          DEFAULT: '#fb7185',
-        },
+        seal: '#9c4634', // softer brick red
       },
       boxShadow: {
-        soft: '0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px rgba(0,0,0,0.35)',
-        lift: '0 1px 0 rgba(255,255,255,0.06) inset, 0 16px 48px rgba(0,0,0,0.55)',
-        ring: '0 0 0 1px rgba(255,255,255,0.06)',
-        glow: '0 0 0 1px rgba(139,92,246,0.45), 0 8px 32px rgba(139,92,246,0.30)',
+        page: '0 1px 0 rgba(254,251,241,0.6) inset, 0 1px 2px rgba(50,37,22,0.05), 0 14px 32px -24px rgba(50,37,22,0.22)',
+        lift: '0 1px 0 rgba(254,251,241,0.7) inset, 0 24px 48px -28px rgba(50,37,22,0.32)',
+        ring: '0 0 0 1px rgba(50,37,22,0.10)',
+        stamp: '0 0 0 1px rgba(156,70,52,0.32), 0 6px 18px -8px rgba(156,70,52,0.38)',
       },
       borderRadius: {
-        xl2: '20px',
-        xl3: '28px',
-        xl4: '36px',
-        xl5: '44px',
+        xl2: '14px',
+        xl3: '18px',
+        xl4: '22px',
+        xl5: '28px',
       },
-      backgroundImage: {
-        'gradient-radial':
-          'radial-gradient(ellipse at top left, rgba(139,92,246,0.10), transparent 50%), radial-gradient(ellipse at bottom right, rgba(34,211,238,0.06), transparent 55%)',
-        'grid-fade':
-          'linear-gradient(to bottom, rgba(255,255,255,0.04), transparent 60%)',
+      letterSpacing: {
+        masthead: '-0.04em',
+        caps: '0.18em',
       },
       keyframes: {
-        shimmer: {
-          '0%': { backgroundPosition: '-200% 0' },
-          '100%': { backgroundPosition: '200% 0' },
+        sealPulse: {
+          '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+          '50%': { opacity: '0.65', transform: 'scale(1.04)' },
         },
-        pulseSoft: {
-          '0%, 100%': { opacity: '0.5', transform: 'scale(1)' },
-          '50%': { opacity: '1', transform: 'scale(1.08)' },
+        inkRise: {
+          '0%': { opacity: '0', transform: 'translateY(4px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
         },
       },
       animation: {
-        shimmer: 'shimmer 2.4s ease-in-out infinite',
-        pulseSoft: 'pulseSoft 2.4s ease-in-out infinite',
+        sealPulse: 'sealPulse 2.6s ease-in-out infinite',
+        inkRise: 'inkRise 0.5s ease-out both',
       },
     },
   },

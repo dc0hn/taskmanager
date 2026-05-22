@@ -1,10 +1,10 @@
 export type Category = 'deep' | 'admin' | 'break' | 'other';
 
 export const CATEGORIES: { id: Category; label: string; accent: string; bg: string }[] = [
-  { id: 'deep', label: 'Deep / focused work', accent: '#6366f1', bg: '#eef0ff' },
-  { id: 'admin', label: 'Admin & email', accent: '#0ea5a4', bg: '#e6f7f6' },
-  { id: 'break', label: 'Break / personal', accent: '#d97706', bg: '#fdf2e1' },
-  { id: 'other', label: 'Other', accent: '#64748b', bg: '#eef1f5' },
+  { id: 'deep', label: 'Deep focus', accent: '#7a2530', bg: 'rgba(122,37,48,0.10)' },
+  { id: 'admin', label: 'Admin & email', accent: '#1f3b5d', bg: 'rgba(31,59,93,0.10)' },
+  { id: 'break', label: 'Break / personal', accent: '#b07720', bg: 'rgba(176,119,32,0.13)' },
+  { id: 'other', label: 'Other', accent: '#4a3d2e', bg: 'rgba(74,61,46,0.08)' },
 ];
 
 export interface Task {
@@ -39,5 +39,5 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   workingStart: 8 * 60,
-  workingEnd: 18 * 60,
+  workingEnd: 19 * 60,
 };

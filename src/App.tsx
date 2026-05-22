@@ -68,18 +68,14 @@ export default function App() {
         return !(fe <= start || fs >= end);
       });
 
-    // Auto-breaks are scheduler-owned; drop them and let the new build recompute.
+    // Auto-breaks/shutdown are scheduler-owned; drop them and let the new
+    // build recompute. Non-auto blocks that don't conflict with new intake
+    // fixed-time tasks stay put as-is (no transition buffer is carved around
+    // them — they were already placed cleanly).
     const existing = plan.blocks.filter((b) => !b.auto);
-    const keptAnchors: Task[] = existing
-      .filter((b) => !conflictsWithIntake(b.start, b.end))
-      .map((b) => ({
-        id: b.id,
-        title: b.title,
-        duration: b.end - b.start,
-        category: b.category,
-        fixedTime: b.start,
-        priority: 'normal',
-      }));
+    const preserved: Block[] = existing.filter(
+      (b) => !conflictsWithIntake(b.start, b.end)
+    );
     const displacedAsFlex: Task[] = existing
       .filter((b) => conflictsWithIntake(b.start, b.end))
       .map((b) => ({
@@ -91,9 +87,10 @@ export default function App() {
       }));
 
     const result = buildSchedule(
-      [...intakeFixed, ...keptAnchors, ...displacedAsFlex, ...intakeFlex],
+      [...intakeFixed, ...displacedAsFlex, ...intakeFlex],
       settings.workingStart,
-      settings.workingEnd
+      settings.workingEnd,
+      preserved
     );
 
     // Preserve completion state across a rebuild (the scheduler now keeps task ids).
@@ -143,7 +140,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen text-fg-1">
+    <div className="min-h-screen text-ink-1">
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}

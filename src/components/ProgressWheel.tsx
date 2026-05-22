@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Flame, Trophy, Crown } from 'lucide-react';
 import type { Block } from '../types';
 
 interface Props {
@@ -10,27 +9,16 @@ interface Props {
 interface Level {
   name: string;
   hint: string;
-  Icon: typeof Sparkles;
-  color: string;
+  glyph: string;
 }
 
 function levelFor(pct: number, done: number): Level {
-  if (done === 0) {
-    return { name: 'Day ahead', hint: 'Pick something easy to start.', Icon: Sparkles, color: '#a78bfa' };
-  }
-  if (pct < 25) {
-    return { name: 'Warming up', hint: 'Nice — keep going.', Icon: Sparkles, color: '#a78bfa' };
-  }
-  if (pct < 50) {
-    return { name: 'Picking up speed', hint: "You're on a roll.", Icon: Flame, color: '#f59e0b' };
-  }
-  if (pct < 75) {
-    return { name: 'In the zone', hint: 'More than halfway there.', Icon: Flame, color: '#f59e0b' };
-  }
-  if (pct < 100) {
-    return { name: 'Almost there', hint: 'One more push.', Icon: Trophy, color: '#22d3ee' };
-  }
-  return { name: 'Day cleared', hint: 'Everything ticked off.', Icon: Crown, color: '#fde68a' };
+  if (done === 0) return { name: 'Day ahead', hint: 'Begin with something small.', glyph: '☼' };
+  if (pct < 25) return { name: 'Warming up', hint: 'Steady — keep going.', glyph: '⌖' };
+  if (pct < 50) return { name: 'Picking up speed', hint: "You're on a roll.", glyph: '↗' };
+  if (pct < 75) return { name: 'In the zone', hint: 'More than halfway there.', glyph: '✦' };
+  if (pct < 100) return { name: 'Almost there', hint: 'One more push.', glyph: '✧' };
+  return { name: 'Day cleared', hint: 'Everything ticked off.', glyph: '✺' };
 }
 
 function useCountUp(target: number) {
@@ -64,109 +52,182 @@ export default function ProgressWheel({ blocks }: Props) {
   const level = levelFor(pctInt, done);
   const complete = total > 0 && done === total;
 
-  const r = 50;
-  const circumference = 2 * Math.PI * r;
+  // Dial geometry
+  const size = 132;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rOuter = 60;
+  const rInner = 48;
+  const rArc = 53;
+  const circumference = 2 * Math.PI * rArc;
+
+  // Tick marks every 10%
+  const ticks = Array.from({ length: 24 }, (_, i) => i);
 
   return (
-    <motion.div
-      layout
-      className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 overflow-hidden"
-    >
-      <div className="absolute -top-20 -left-12 w-44 h-44 rounded-full bg-cat-deep/15 blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-16 -right-12 w-44 h-44 rounded-full bg-cat-admin/10 blur-3xl pointer-events-none" />
-      <div className="relative flex items-center justify-between mb-3">
-        <h2 className="text-[11px] uppercase tracking-[0.14em] text-fg-4 font-medium">
+    <motion.div layout className="relative paper-card rounded-xl5 p-5 overflow-hidden">
+      <div className="relative flex items-baseline justify-between mb-3">
+        <h2 className="font-display text-[18px] leading-none text-ink-1" style={{ fontVariationSettings: '"opsz" 144, "SOFT" 50', fontWeight: 500 }}>
           Progress
         </h2>
-        <span className="text-[10px] text-fg-5 tnum">
-          {done} / {total}
+        <span className="font-mono text-[11px] text-ink-3 tnum tracking-wider">
+          {String(done).padStart(2, '0')} / {String(total).padStart(2, '0')}
         </span>
       </div>
+      <div className="rule-h mb-3" />
 
-      <div className="relative flex items-center gap-4">
+      <div className="relative flex items-center gap-5">
         <div className="relative shrink-0">
-          <svg width={124} height={124} viewBox="0 0 124 124" className="block">
+          <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block">
             <defs>
-              <linearGradient id="wheelGradient" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#a78bfa" />
-                <stop offset="55%" stopColor="#6366f1" />
-                <stop offset="100%" stopColor="#22d3ee" />
-              </linearGradient>
-              <filter id="wheelGlow" x="-30%" y="-30%" width="160%" height="160%">
-                <feGaussianBlur stdDeviation="2.2" result="blur" />
-                <feMerge>
-                  <feMergeNode in="blur" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
+              <radialGradient id="dialFace" cx="50%" cy="40%" r="60%">
+                <stop offset="0%" stopColor="#fffaec" />
+                <stop offset="100%" stopColor="#f1e7d0" />
+              </radialGradient>
             </defs>
+
+            {/* Dial face */}
+            <circle cx={cx} cy={cy} r={rOuter} fill="url(#dialFace)" stroke="rgba(28,20,11,0.42)" strokeWidth={0.8} />
+
+            {/* Tick marks */}
+            {ticks.map((i) => {
+              const angle = (i / 24) * Math.PI * 2 - Math.PI / 2;
+              const isMajor = i % 6 === 0;
+              const r1 = rOuter - (isMajor ? 6 : 3);
+              const r2 = rOuter - 1;
+              const x1 = cx + Math.cos(angle) * r1;
+              const y1 = cy + Math.sin(angle) * r1;
+              const x2 = cx + Math.cos(angle) * r2;
+              const y2 = cy + Math.sin(angle) * r2;
+              return (
+                <line
+                  key={i}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke="rgba(28,20,11,0.55)"
+                  strokeWidth={isMajor ? 1.2 : 0.7}
+                />
+              );
+            })}
+
+            {/* Progress arc track */}
             <circle
-              cx={62}
-              cy={62}
-              r={r}
+              cx={cx}
+              cy={cy}
+              r={rArc}
               fill="none"
-              stroke="rgba(255,255,255,0.05)"
-              strokeWidth={9}
+              stroke="rgba(28,20,11,0.10)"
+              strokeWidth={4}
             />
+
+            {/* Progress arc (ink) */}
             <motion.circle
-              cx={62}
-              cy={62}
-              r={r}
+              cx={cx}
+              cy={cy}
+              r={rArc}
               fill="none"
-              stroke="url(#wheelGradient)"
-              strokeWidth={9}
-              strokeLinecap="round"
+              stroke="#9e3a26"
+              strokeWidth={4}
+              strokeLinecap="butt"
               strokeDasharray={circumference}
-              transform="rotate(-90 62 62)"
-              filter="url(#wheelGlow)"
+              transform={`rotate(-90 ${cx} ${cy})`}
               initial={false}
               animate={{
                 strokeDashoffset: circumference * (1 - pct),
               }}
-              transition={{ type: 'spring', stiffness: 80, damping: 22 }}
+              transition={{ type: 'spring', stiffness: 90, damping: 24 }}
             />
+
+            {/* Inner hairline */}
+            <circle cx={cx} cy={cy} r={rInner} fill="none" stroke="rgba(28,20,11,0.22)" strokeWidth={0.6} />
+
+            {/* Cardinal labels */}
+            <text x={cx} y={cy - rOuter - 4} textAnchor="middle" fontSize="8" fill="rgba(28,20,11,0.6)" fontFamily="JetBrains Mono, monospace" letterSpacing="0.12em">
+              100
+            </text>
+            <text x={cx + rOuter + 6} y={cy + 3} textAnchor="start" fontSize="8" fill="rgba(28,20,11,0.6)" fontFamily="JetBrains Mono, monospace" letterSpacing="0.12em">
+              25
+            </text>
+            <text x={cx} y={cy + rOuter + 10} textAnchor="middle" fontSize="8" fill="rgba(28,20,11,0.6)" fontFamily="JetBrains Mono, monospace" letterSpacing="0.12em">
+              50
+            </text>
+            <text x={cx - rOuter - 6} y={cy + 3} textAnchor="end" fontSize="8" fill="rgba(28,20,11,0.6)" fontFamily="JetBrains Mono, monospace" letterSpacing="0.12em">
+              75
+            </text>
           </svg>
 
-          {/* Centered % */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            <motion.div
-              key={complete ? 'done' : 'pct'}
-              initial={{ scale: 0.92, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: 'spring', stiffness: 320, damping: 22 }}
-              className="text-2xl font-semibold tracking-tight text-fg-0 tnum leading-none"
-            >
-              {displayPct}
-              <span className="text-fg-3 text-base font-medium ml-0.5">%</span>
-            </motion.div>
-            <div className="text-[10px] uppercase tracking-wider text-fg-4 mt-1">
-              done
+          {/* Digit block sits dead-center. The "%" hangs to its right; the
+              "completed" caption is tucked tight under the digit so the
+              whole stack lives well inside the rInner hairline (r = 48). */}
+          <div className="absolute inset-0 grid place-items-center pointer-events-none">
+            <div className="relative">
+              <motion.div
+                key={complete ? 'done' : 'pct'}
+                initial={{ scale: 0.94, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+                className="font-display tnum text-ink-0"
+                style={{
+                  fontSize: '30px',
+                  fontWeight: 500,
+                  lineHeight: 1,
+                  fontVariationSettings: '"opsz" 144, "SOFT" 40',
+                }}
+              >
+                {displayPct}
+              </motion.div>
+              <span
+                className="absolute font-display text-ink-3 font-light"
+                style={{
+                  fontSize: '13px',
+                  lineHeight: 1,
+                  left: 'calc(100% + 2px)',
+                  top: '4px',
+                }}
+              >
+                %
+              </span>
+              <div
+                className="absolute left-1/2 -translate-x-1/2 smallcaps text-ink-3 whitespace-nowrap"
+                style={{
+                  top: 'calc(100% + 1px)',
+                  fontSize: '9px',
+                  letterSpacing: '0.14em',
+                }}
+              >
+                completed
+              </div>
             </div>
           </div>
 
-          {/* Sparkles on 100% */}
+          {/* Asterisks on 100% — like little ink stars */}
           <AnimatePresence>
             {complete && (
               <>
                 {[...Array(8)].map((_, i) => {
                   const angle = (i / 8) * Math.PI * 2;
-                  const dx = Math.cos(angle) * 70;
-                  const dy = Math.sin(angle) * 70;
+                  const dx = Math.cos(angle) * 78;
+                  const dy = Math.sin(angle) * 78;
                   return (
                     <motion.span
                       key={i}
-                      className="absolute top-1/2 left-1/2 w-1 h-1 rounded-full bg-amber-300"
-                      style={{ boxShadow: '0 0 8px #fcd34d' }}
-                      initial={{ x: 0, y: 0, opacity: 0, scale: 0 }}
+                      className="absolute top-1/2 left-1/2 font-display text-seal"
+                      style={{ fontSize: '14px' }}
+                      initial={{ x: 0, y: 0, opacity: 0, scale: 0, rotate: 0 }}
                       animate={{
                         x: dx,
                         y: dy,
                         opacity: [0, 1, 0],
-                        scale: [0, 1.2, 0.6],
+                        scale: [0, 1, 0.6],
+                        rotate: 180,
                       }}
                       exit={{ opacity: 0 }}
-                      transition={{ duration: 1.4, delay: i * 0.04, repeat: Infinity, repeatDelay: 1.6 }}
-                    />
+                      transition={{ duration: 1.6, delay: i * 0.06, repeat: Infinity, repeatDelay: 1.6 }}
+                    >
+                      ✦
+                    </motion.span>
                   );
                 })}
               </>
@@ -175,16 +236,19 @@ export default function ProgressWheel({ blocks }: Props) {
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 mb-1">
-            <span
-              className="inline-flex items-center justify-center w-6 h-6 rounded-xl"
-              style={{
-                background: `${level.color}22`,
-                boxShadow: `0 0 12px ${level.color}55, inset 0 0 0 1px ${level.color}55`,
-              }}
-            >
-              <level.Icon size={13} style={{ color: level.color }} />
-            </span>
+          <div className="flex items-baseline gap-2 mb-1">
+            <AnimatePresence mode="wait">
+              <motion.span
+                key={level.glyph}
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ duration: 0.25 }}
+                className="font-display text-[20px] text-seal leading-none"
+              >
+                {level.glyph}
+              </motion.span>
+            </AnimatePresence>
             <AnimatePresence mode="wait">
               <motion.span
                 key={level.name}
@@ -192,7 +256,8 @@ export default function ProgressWheel({ blocks }: Props) {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -3 }}
                 transition={{ duration: 0.22 }}
-                className="text-sm font-semibold tracking-tight text-fg-0"
+                className="font-display italic text-[16px] text-ink-1 leading-tight"
+                style={{ fontVariationSettings: '"opsz" 24, "SOFT" 80' }}
               >
                 {level.name}
               </motion.span>
@@ -205,24 +270,22 @@ export default function ProgressWheel({ blocks }: Props) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.22 }}
-              className="text-[11px] text-fg-3 leading-relaxed mb-2"
+              className="text-[12.5px] text-ink-2 leading-relaxed mb-3"
             >
               {level.hint}
             </motion.p>
           </AnimatePresence>
-          <div className="flex items-center gap-1 text-[10px] text-fg-4 tnum">
+          <div className="flex items-center gap-1 font-mono text-[11px] text-ink-3 tnum">
             {[...Array(Math.max(total, 1))].map((_, i) => {
               const filled = i < done;
               return (
                 <span
                   key={i}
-                  className="h-1.5 flex-1 rounded-full transition-all"
+                  className="h-2.5 flex-1 transition-all rounded-sm"
                   style={{
-                    background: filled
-                      ? 'linear-gradient(90deg, #a78bfa, #22d3ee)'
-                      : 'rgba(255,255,255,0.05)',
-                    boxShadow: filled ? '0 0 8px rgba(139,92,246,0.4)' : undefined,
-                    maxWidth: 18,
+                    maxWidth: 16,
+                    background: filled ? '#9e3a26' : 'rgba(28,20,11,0.10)',
+                    border: filled ? '1px solid rgba(158,58,38,0.55)' : '1px solid rgba(28,20,11,0.20)',
                   }}
                 />
               );

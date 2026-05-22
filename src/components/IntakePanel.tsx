@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Sparkles, X, Trash2, Clock, Flag, Pencil } from 'lucide-react';
+import { Plus, X, Trash2, Clock, Flag, Pencil } from 'lucide-react';
 import { CATEGORIES } from '../types';
 import type { Category, Task } from '../types';
 import { DURATION_PRESETS, parseTaskLine } from '../parser';
@@ -32,32 +32,15 @@ function makeTask(parsed: ReturnType<typeof parseTaskLine>): Task | null {
   };
 }
 
-const CAT_TINT: Record<Category, { bg: string; ring: string; dot: string; text: string }> = {
-  deep: {
-    bg: 'rgba(139,92,246,0.10)',
-    ring: 'rgba(139,92,246,0.30)',
-    dot: '#a78bfa',
-    text: '#c4b5fd',
-  },
-  admin: {
-    bg: 'rgba(34,211,238,0.10)',
-    ring: 'rgba(34,211,238,0.30)',
-    dot: '#22d3ee',
-    text: '#67e8f9',
-  },
-  break: {
-    bg: 'rgba(245,158,11,0.10)',
-    ring: 'rgba(245,158,11,0.30)',
-    dot: '#f59e0b',
-    text: '#fbbf24',
-  },
-  other: {
-    bg: 'rgba(148,163,184,0.10)',
-    ring: 'rgba(148,163,184,0.25)',
-    dot: '#94a3b8',
-    text: '#cbd5e1',
-  },
+// Editorial chip palette
+const CAT_TINT: Record<Category, { tint: string; bar: string; ink: string; label: string }> = {
+  deep: { tint: 'rgba(122,37,48,0.08)', bar: '#7a2530', ink: '#4a131c', label: 'Deep' },
+  admin: { tint: 'rgba(31,59,93,0.08)', bar: '#1f3b5d', ink: '#15263e', label: 'Admin' },
+  break: { tint: 'rgba(176,119,32,0.11)', bar: '#b07720', ink: '#6e4810', label: 'Break' },
+  other: { tint: 'rgba(74,61,46,0.06)', bar: '#4a3d2e', ink: '#3a2e22', label: 'Other' },
 };
+
+const CHIP_RADIUS = 8;
 
 export default function IntakePanel({
   tasks,
@@ -97,55 +80,63 @@ export default function IntakePanel({
 
   return (
     <div className="flex flex-col gap-5 flex-1 min-h-0">
+      {/* Intake notepad */}
       <motion.div
         layout
-        className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 overflow-hidden shrink-0"
+        className="relative paper-card rounded-xl5 p-5 shrink-0"
       >
-        <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-cat-deep/15 blur-3xl pointer-events-none" />
-        <div className="relative flex items-center justify-between mb-3">
-          <h2 className="text-[11px] uppercase tracking-[0.14em] text-fg-4 font-medium">
+        <div className="relative flex items-baseline justify-between mb-3">
+          <h2 className="font-display text-[18px] leading-none text-ink-1" style={{ fontVariationSettings: '"opsz" 144, "SOFT" 50', fontWeight: 500 }}>
             Morning intake
           </h2>
-          <span className="text-[10px] text-fg-5">
-            Try <code className="bg-white/5 px-1.5 py-0.5 rounded text-fg-3">@2pm 30m !high</code>
+          <span className="font-mono text-[11px] text-ink-3 tracking-wider">
+            <span>@2pm</span> · <span>30m</span> · <span>!high</span>
           </span>
         </div>
+        <div className="rule-h mb-3" />
         <textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="What do you want to get done today?&#10;One task per line. Press Enter to add."
-          className="relative w-full min-h-[92px] resize-y rounded-xl2 border border-line-1 bg-bg-2/60 text-fg-1 placeholder:text-fg-5 focus:outline-none focus:focus-ring px-3 py-2.5 text-sm leading-relaxed transition-all"
+          className="ledger-lines relative w-full min-h-[112px] resize-y bg-paper-4/40 text-ink-1 placeholder:text-ink-3 placeholder:italic focus:outline-none focus:focus-ring px-3 py-1 text-[15px] leading-7 transition-all font-display rounded-md border border-rule-3"
+          style={{ fontVariationSettings: '"opsz" 12, "SOFT" 0' }}
         />
         <div className="relative flex items-center justify-between gap-2 mt-3">
           <button
             onClick={submit}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-2 hover:text-fg-0 px-2.5 py-1.5 rounded-lg hover:bg-white/5 transition-colors"
+            className="inline-flex items-center gap-1.5 smallcaps text-[11px] text-ink-2 hover:text-ink-0 hover:bg-paper-3 px-3 py-2 rounded-md transition-colors min-h-[36px]"
           >
-            <Plus size={13} />
+            <Plus size={14} strokeWidth={1.8} />
             Add task
           </button>
           <BuildButton onClick={onBuildDay} disabled={tasks.length === 0} />
         </div>
       </motion.div>
 
-      <div className="bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 flex flex-col flex-1 min-h-[160px]">
-        <div className="flex items-center justify-between mb-3 shrink-0">
-          <h2 className="text-[11px] uppercase tracking-[0.14em] text-fg-4 font-medium">
-            Unscheduled <span className="text-fg-5 font-normal normal-case tracking-normal">· {tasks.length}</span>
+      {/* Unscheduled queue */}
+      <div className="paper-card rounded-xl5 p-5 flex flex-col flex-1 min-h-[180px]">
+        <div className="flex items-baseline justify-between mb-3 shrink-0">
+          <h2 className="font-display text-[18px] leading-none text-ink-1" style={{ fontVariationSettings: '"opsz" 144, "SOFT" 50', fontWeight: 500 }}>
+            Unscheduled
           </h2>
+          <span className="font-mono text-[11px] text-ink-3 tracking-wider tnum">
+            {String(tasks.length).padStart(2, '0')} {tasks.length === 1 ? 'item' : 'items'}
+          </span>
         </div>
+        <div className="rule-h mb-2" />
         <div className="overflow-y-auto no-scrollbar -mx-1 px-1 flex-1 min-h-0">
           {tasks.length === 0 ? (
             <motion.p
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="text-sm text-fg-4 py-8 text-center"
+              className="font-display italic text-[14px] text-ink-3 py-8 text-center"
+              style={{ fontVariationSettings: '"opsz" 24, "SOFT" 80' }}
             >
-              No tasks yet — add what you want to get done today.
+              The page is blank — write the day above.
             </motion.p>
           ) : (
-            <ul className="space-y-1.5">
+            <ul className="space-y-2">
               <AnimatePresence initial={false}>
                 {tasks.map((t) => {
                   const tint = CAT_TINT[t.category];
@@ -153,49 +144,80 @@ export default function IntakePanel({
                     <motion.li
                       key={t.id}
                       layout
-                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, x: 20, scale: 0.97 }}
-                      transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-                      className="group rounded-xl2 px-2.5 py-2 border"
-                      style={{ background: tint.bg, borderColor: tint.ring }}
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, x: 16 }}
+                      transition={{ type: 'spring', stiffness: 360, damping: 30 }}
+                      className="group relative overflow-hidden"
+                      style={{
+                        background: tint.tint,
+                        border: '1px solid rgba(28,20,11,0.18)',
+                        borderRadius: CHIP_RADIUS + 'px',
+                        boxShadow: '0 1px 0 rgba(255,250,237,0.5) inset',
+                      }}
                     >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className="mt-1.5 inline-block w-1.5 h-1.5 rounded-full shrink-0"
-                          style={{ background: tint.dot, boxShadow: `0 0 8px ${tint.dot}` }}
-                        />
+                      {/* Left accent bar — rounded corners match chip */}
+                      <span
+                        className="absolute left-0 top-0 bottom-0"
+                        style={{
+                          width: '3px',
+                          background: tint.bar,
+                          borderTopLeftRadius: CHIP_RADIUS + 'px',
+                          borderBottomLeftRadius: CHIP_RADIUS + 'px',
+                        }}
+                      />
+                      <div className="pl-3.5 pr-2 py-2 flex items-start gap-2">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 text-sm text-fg-0">
-                            <span className="truncate">{t.title}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="smallcaps text-[10.5px] shrink-0"
+                              style={{ color: tint.bar, opacity: 0.95 }}
+                            >
+                              {tint.label}
+                            </span>
                             {t.priority === 'high' && (
-                              <Flag size={12} className="text-rose shrink-0" />
+                              <span
+                                className="smallcaps text-[10.5px] shrink-0 px-1.5 py-0.5 rounded-sm"
+                                style={{
+                                  color: '#9e3a26',
+                                  border: '1px solid rgba(158,58,38,0.45)',
+                                }}
+                              >
+                                High
+                              </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-fg-3 tnum">
-                            <span className="inline-flex items-center gap-0.5">
-                              <Clock size={11} />
+                          <div
+                            className="font-display text-[14.5px] text-ink-1 truncate mt-0.5"
+                            style={{ fontVariationSettings: '"opsz" 24, "SOFT" 40', fontWeight: 500 }}
+                          >
+                            {t.title}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 font-mono text-[11px] text-ink-3 tnum tracking-wider">
+                            <span className="inline-flex items-center gap-1">
+                              <Clock size={11} strokeWidth={1.7} />
                               {formatDuration(t.duration)}
                             </span>
                             {t.fixedTime != null && (
-                              <span className="text-fg-4">· at {format12h(t.fixedTime)}</span>
+                              <span className="text-ink-3">· {format12h(t.fixedTime).toUpperCase()}</span>
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {/* Always-visible action cluster (40% by default, 100% on hover) */}
+                        <div className="flex items-center gap-0.5 opacity-50 group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={() => setOpenId(openId === t.id ? null : t.id)}
-                            className="p-1 rounded hover:bg-white/10 text-fg-3 hover:text-fg-0"
+                            className="grid place-items-center w-7 h-7 rounded-md hover:bg-paper-4 text-ink-3 hover:text-ink-0 transition-colors"
                             aria-label="Edit task"
                           >
-                            <Pencil size={12} />
+                            <Pencil size={13} strokeWidth={1.7} />
                           </button>
                           <button
                             onClick={() => onRemoveTask(t.id)}
-                            className="p-1 rounded hover:bg-white/10 text-fg-3 hover:text-rose"
+                            className="grid place-items-center w-7 h-7 rounded-md hover:bg-paper-4 text-ink-3 hover:text-seal transition-colors"
                             aria-label="Remove task"
                           >
-                            <Trash2 size={12} />
+                            <Trash2 size={13} strokeWidth={1.7} />
                           </button>
                         </div>
                       </div>
@@ -228,28 +250,33 @@ export default function IntakePanel({
       <AnimatePresence>
         {overflow.length > 0 && (
           <motion.div
-            initial={{ opacity: 0, y: 8 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 8 }}
-            className="bg-rose-500/10 border border-rose-500/30 rounded-xl3 p-3.5"
+            exit={{ opacity: 0, y: 6 }}
+            className="relative paper-card rounded-xl4 p-4"
+            style={{
+              borderColor: 'rgba(158,58,38,0.36)',
+              background:
+                'linear-gradient(180deg, rgba(158,58,38,0.07), rgba(158,58,38,0.02))',
+            }}
           >
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="text-xs font-medium text-rose-300">
-                Didn't fit ({overflow.length})
+            <div className="flex items-baseline justify-between mb-1">
+              <h3 className="font-display text-[15px] text-seal" style={{ fontVariationSettings: '"opsz" 24, "SOFT" 40', fontWeight: 500 }}>
+                Didn't fit · {overflow.length}
               </h3>
               <button
                 onClick={onClearOverflow}
-                className="text-rose-300/80 hover:text-rose-200"
+                className="grid place-items-center w-7 h-7 rounded-md text-seal/70 hover:text-seal hover:bg-paper-4/60"
                 aria-label="Dismiss overflow"
               >
-                <X size={14} />
+                <X size={14} strokeWidth={1.8} />
               </button>
             </div>
-            <ul className="text-[11px] text-rose-200/90 space-y-0.5">
+            <ul className="font-mono text-[11.5px] text-ink-2 space-y-0.5 tnum">
               {overflow.map((t) => (
-                <li key={t.id} className="tnum">
+                <li key={t.id}>
                   · {t.title}{' '}
-                  <span className="opacity-70">({formatDuration(t.duration)})</span>
+                  <span className="text-ink-3">({formatDuration(t.duration)})</span>
                 </li>
               ))}
             </ul>
@@ -271,27 +298,27 @@ function BuildButton({
     <motion.button
       onClick={onClick}
       disabled={disabled}
-      whileHover={!disabled ? { scale: 1.02 } : undefined}
-      whileTap={!disabled ? { scale: 0.97 } : undefined}
-      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-      className={`relative inline-flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2 rounded-xl2 overflow-hidden ${
+      whileHover={!disabled ? { scale: 1.02, rotate: -0.4 } : undefined}
+      whileTap={!disabled ? { scale: 0.97, rotate: 0.4 } : undefined}
+      transition={{ type: 'spring', stiffness: 420, damping: 22 }}
+      className={`relative inline-flex items-center gap-2 smallcaps text-[12px] px-4 py-2.5 rounded-md transition-colors min-h-[40px] ${
         disabled
-          ? 'bg-white/5 text-fg-5 cursor-not-allowed'
-          : 'text-white shadow-glow'
+          ? 'bg-paper-2 text-ink-4 border border-rule-1 cursor-not-allowed'
+          : 'text-paper-4 stamp-shadow'
       }`}
       style={
         disabled
           ? undefined
           : {
-              backgroundImage:
-                'linear-gradient(135deg, #7c3aed 0%, #6366f1 45%, #22d3ee 100%)',
+              background:
+                'linear-gradient(180deg, #b14935 0%, #9e3a26 55%, #832c1b 100%)',
             }
       }
     >
-      {!disabled && (
-        <span className="absolute inset-0 shimmer animate-shimmer pointer-events-none" />
-      )}
-      <Sparkles size={13} className="relative" />
+      <span
+        className="relative inline-block w-1.5 h-1.5 rounded-full"
+        style={{ background: disabled ? '#9a8460' : '#fcd9a8' }}
+      />
       <span className="relative">Build my day</span>
     </motion.button>
   );
@@ -307,30 +334,30 @@ function TaskEditor({
   onClose: () => void;
 }) {
   return (
-    <div className="mt-2 pt-2 border-t border-white/10 space-y-2.5">
+    <div className="mx-3 mb-3 pt-2.5 border-t border-rule-3 space-y-3">
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1">
+        <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1">
           Title
         </label>
         <input
           value={task.title}
           onChange={(e) => onChange({ title: e.target.value })}
-          className="w-full text-sm rounded-lg border border-line-2 bg-bg-1 px-2 py-1.5 text-fg-1 focus:outline-none focus:focus-ring"
+          className="w-full font-display text-[13.5px] rounded border border-rule-3 bg-paper-4 px-2.5 py-1.5 text-ink-1 focus:outline-none focus:focus-ring"
         />
       </div>
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1">
+        <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1">
           Duration
         </label>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1.5">
           {DURATION_PRESETS.map((d) => (
             <button
               key={d}
               onClick={() => onChange({ duration: d })}
-              className={`text-[11px] px-2.5 py-1 rounded-full tnum transition-all ${
+              className={`font-mono text-[11.5px] px-2.5 py-1.5 rounded tnum tracking-wider transition-all border ${
                 task.duration === d
-                  ? 'bg-white text-bg-0 shadow'
-                  : 'bg-white/5 text-fg-2 hover:bg-white/10'
+                  ? 'bg-ink-1 text-paper-4 border-ink-1'
+                  : 'bg-paper-4 text-ink-2 hover:bg-paper-3 border-rule-3'
               }`}
             >
               {d}m
@@ -339,27 +366,24 @@ function TaskEditor({
         </div>
       </div>
       <div>
-        <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1">
+        <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1">
           Category
         </label>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1.5">
           {CATEGORIES.map((c) => {
             const active = task.category === c.id;
             return (
               <button
                 key={c.id}
                 onClick={() => onChange({ category: c.id })}
-                className={`text-[11px] px-2.5 py-1 rounded-full inline-flex items-center gap-1 transition-all border`}
+                className="text-[11.5px] font-medium px-2.5 py-1.5 rounded inline-flex items-center gap-1.5 tracking-wide uppercase transition-all border"
                 style={{
-                  background: active ? c.bg : 'rgba(255,255,255,0.03)',
-                  borderColor: active ? c.accent : 'rgba(255,255,255,0.08)',
-                  color: active ? c.accent : '#cbd5e1',
+                  background: active ? c.bg : 'rgba(255,250,237,0.45)',
+                  borderColor: active ? c.accent : 'rgba(28,20,11,0.18)',
+                  color: active ? c.accent : '#3a2c1c',
                 }}
               >
-                <span
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{ background: c.accent, boxShadow: `0 0 6px ${c.accent}` }}
-                />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: c.accent }} />
                 {c.label.split(' ')[0]}
               </button>
             );
@@ -368,7 +392,7 @@ function TaskEditor({
       </div>
       <div className="flex gap-2 items-end">
         <div className="flex-1">
-          <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1">
+          <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1">
             Fixed time
           </label>
           <input
@@ -384,24 +408,28 @@ function TaskEditor({
               const [h, m] = v.split(':').map(Number);
               onChange({ fixedTime: h * 60 + m });
             }}
-            className="w-full text-sm rounded-lg border border-line-2 bg-bg-1 px-2 py-1.5 tnum text-fg-1 focus:outline-none focus:focus-ring"
+            className="w-full font-mono text-[13px] rounded border border-rule-3 bg-paper-4 px-2.5 py-1.5 tnum text-ink-1 focus:outline-none focus:focus-ring"
           />
         </div>
         <div>
-          <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1">
+          <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1">
             Priority
           </label>
           <button
             onClick={() =>
               onChange({ priority: task.priority === 'high' ? 'normal' : 'high' })
             }
-            className={`text-[11px] px-2 py-1.5 rounded-lg inline-flex items-center gap-1 transition-all ${
+            className={`text-[11.5px] font-medium px-2.5 py-2 rounded inline-flex items-center gap-1 transition-all tracking-wide uppercase border ${
               task.priority === 'high'
-                ? 'bg-rose-500/20 text-rose-200 border border-rose-500/30'
-                : 'bg-white/5 text-fg-2 hover:bg-white/10 border border-line-1'
+                ? 'text-seal'
+                : 'text-ink-2 hover:bg-paper-3'
             }`}
+            style={{
+              background: task.priority === 'high' ? 'rgba(158,58,38,0.08)' : 'rgba(255,250,237,0.45)',
+              borderColor: task.priority === 'high' ? 'rgba(158,58,38,0.45)' : 'rgba(28,20,11,0.18)',
+            }}
           >
-            <Flag size={11} />
+            <Flag size={11} strokeWidth={1.7} />
             {task.priority === 'high' ? 'High' : 'Normal'}
           </button>
         </div>
@@ -409,7 +437,7 @@ function TaskEditor({
       <div className="flex justify-end">
         <button
           onClick={onClose}
-          className="text-[11px] text-fg-3 hover:text-fg-0 px-2 py-1 rounded"
+          className="smallcaps text-[11px] text-ink-3 hover:text-ink-0 hover:bg-paper-3 px-2.5 py-1.5 rounded transition-colors"
         >
           Done
         </button>

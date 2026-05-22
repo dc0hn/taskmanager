@@ -2,7 +2,7 @@ import { DEFAULT_SETTINGS } from './types';
 import type { DayPlan, Settings } from './types';
 
 const PLAN_PREFIX = 'dp:plan:';
-const SETTINGS_KEY = 'dp:settings';
+const SETTINGS_KEY = 'dp:settings:v2';
 
 export function loadPlan(date: string): DayPlan {
   try {

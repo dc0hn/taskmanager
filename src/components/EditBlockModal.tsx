@@ -68,67 +68,77 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
           transition={{ duration: 0.15 }}
         >
           <motion.div
-            className="absolute inset-0 bg-bg-0/70"
-            style={{ backdropFilter: 'blur(8px)' }}
+            className="absolute inset-0"
+            style={{
+              background: 'rgba(28, 20, 11, 0.58)',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+            }}
             onClick={onClose}
           />
           <motion.div
-            initial={{ y: 14, opacity: 0, scale: 0.97 }}
+            initial={{ y: 12, opacity: 0, scale: 0.98 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: 10, opacity: 0, scale: 0.98 }}
+            exit={{ y: 8, opacity: 0, scale: 0.98 }}
             transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-            className="relative bg-bg-2 border border-line-2 shadow-lift rounded-xl5 w-full max-w-md p-6 overflow-hidden"
+            className="relative paper-card rounded-xl5 w-full max-w-md p-6 shadow-lift"
           >
-            <div className="absolute -top-20 -right-20 w-48 h-48 rounded-full bg-cat-deep/20 blur-3xl pointer-events-none" />
-            <div className="relative flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold tracking-tight text-fg-0">Edit block</h3>
+            <div className="relative flex items-baseline justify-between mb-4">
+              <div>
+                <p className="smallcaps text-[11px] text-ink-3 mb-0.5">Edit entry</p>
+                <h3 className="font-display italic text-[22px] text-ink-0 leading-tight" style={{ fontVariationSettings: '"opsz" 144, "SOFT" 80' }}>
+                  {title || 'Untitled'}
+                </h3>
+              </div>
               <button
                 onClick={onClose}
-                className="p-1.5 rounded-lg text-fg-3 hover:text-fg-0 hover:bg-white/5"
+                className="grid place-items-center w-8 h-8 rounded-md text-ink-3 hover:text-ink-0 hover:bg-paper-3 transition-colors"
                 aria-label="Close"
               >
-                <X size={15} />
+                <X size={16} strokeWidth={1.6} />
               </button>
             </div>
+            <div className="rule-h mb-5" />
 
-            <div className="relative space-y-3.5">
+            <div className="relative space-y-4">
               <div>
-                <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1.5">
+                <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
                   Title
                 </label>
                 <input
                   autoFocus
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full text-sm rounded-lg border border-line-2 bg-bg-1 px-2.5 py-2 text-fg-0 focus:outline-none focus:focus-ring"
+                  className="w-full font-display text-[14px] rounded border border-rule-2 bg-paper-4 px-2.5 py-2 text-ink-0 focus:outline-none focus:focus-ring"
+                  style={{ fontVariationSettings: '"opsz" 24, "SOFT" 40' }}
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1.5">
+                  <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
                     Start
                   </label>
                   <input
                     type="time"
                     value={start}
                     onChange={(e) => setStart(e.target.value)}
-                    className="w-full text-sm rounded-lg border border-line-2 bg-bg-1 px-2.5 py-2 tnum text-fg-0 focus:outline-none focus:focus-ring"
+                    className="w-full font-mono text-[13px] rounded border border-rule-2 bg-paper-4 px-2.5 py-2 tnum text-ink-0 focus:outline-none focus:focus-ring"
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1.5">
+                  <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
                     End
                   </label>
                   <input
                     type="time"
                     value={end}
                     onChange={(e) => setEnd(e.target.value)}
-                    className="w-full text-sm rounded-lg border border-line-2 bg-bg-1 px-2.5 py-2 tnum text-fg-0 focus:outline-none focus:focus-ring"
+                    className="w-full font-mono text-[13px] rounded border border-rule-2 bg-paper-4 px-2.5 py-2 tnum text-ink-0 focus:outline-none focus:focus-ring"
                   />
                 </div>
               </div>
               <div>
-                <label className="text-[10px] uppercase tracking-wider text-fg-4 block mb-1.5">
+                <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
                   Category
                 </label>
                 <div className="flex flex-wrap gap-1.5">
@@ -138,17 +148,14 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
                       <button
                         key={c.id}
                         onClick={() => setCategory(c.id)}
-                        className="text-xs px-3 py-1.5 rounded-full inline-flex items-center gap-1.5 border transition-all"
+                        className="text-[11.5px] font-medium px-3 py-1.5 rounded inline-flex items-center gap-1.5 border tracking-wide uppercase transition-all"
                         style={{
-                          background: active ? c.bg : 'rgba(255,255,255,0.03)',
-                          borderColor: active ? c.accent : 'rgba(255,255,255,0.08)',
-                          color: active ? c.accent : '#cbd5e1',
+                          background: active ? c.bg : 'rgba(255,250,237,0.45)',
+                          borderColor: active ? c.accent : 'rgba(28,20,11,0.18)',
+                          color: active ? c.accent : '#3a2c1c',
                         }}
                       >
-                        <span
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{ background: c.accent, boxShadow: `0 0 6px ${c.accent}` }}
-                        />
+                        <span className="w-1.5 h-1.5 rounded-sm" style={{ background: c.accent }} />
                         {c.label}
                       </button>
                     );
@@ -158,10 +165,11 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
               <AnimatePresence>
                 {error && (
                   <motion.p
-                    initial={{ opacity: 0, y: -4 }}
+                    initial={{ opacity: 0, y: -3 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
-                    className="text-xs text-rose-300"
+                    className="font-display italic text-[12.5px] text-seal"
+                    style={{ fontVariationSettings: '"opsz" 14, "SOFT" 80' }}
                   >
                     {error}
                   </motion.p>
@@ -169,29 +177,29 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
               </AnimatePresence>
             </div>
 
-            <div className="relative flex items-center justify-between mt-5">
+            <div className="relative flex items-center justify-between mt-5 pt-4 border-t border-rule-3">
               <button
                 onClick={onDelete}
-                className="inline-flex items-center gap-1.5 text-xs text-rose-300 hover:text-rose-200 px-2 py-1.5 rounded-lg hover:bg-rose-500/10"
+                className="inline-flex items-center gap-1.5 smallcaps text-[12px] text-seal hover:text-ink-0 hover:bg-paper-3 px-2.5 py-2 rounded-md transition-colors min-h-[36px]"
               >
-                <Trash2 size={13} />
-                Delete
+                <Trash2 size={13} strokeWidth={1.7} />
+                Delete entry
               </button>
               <div className="flex items-center gap-2">
                 <button
                   onClick={onClose}
-                  className="text-xs text-fg-2 hover:text-fg-0 px-3 py-1.5 rounded-lg hover:bg-white/5"
+                  className="smallcaps text-[12px] text-ink-3 hover:text-ink-1 hover:bg-paper-3 px-3 py-2 rounded-md transition-colors min-h-[36px]"
                 >
                   Cancel
                 </button>
                 <motion.button
-                  whileHover={{ scale: 1.03 }}
+                  whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={save}
-                  className="text-xs font-semibold text-white px-4 py-1.5 rounded-full shadow-glow"
+                  className="smallcaps text-[12px] text-paper-4 px-4 py-2 rounded-md stamp-shadow min-h-[36px]"
                   style={{
-                    backgroundImage:
-                      'linear-gradient(135deg, #7c3aed 0%, #6366f1 50%, #22d3ee 100%)',
+                    background:
+                      'linear-gradient(180deg, #b14935 0%, #9e3a26 55%, #832c1b 100%)',
                   }}
                 >
                   Save

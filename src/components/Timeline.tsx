@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check } from 'lucide-react';
+import { Check, Pencil } from 'lucide-react';
 import type { Block, Category } from '../types';
-import { format12h, toDateKey } from '../utils/time';
+import { format12h, formatHourLabel, toDateKey } from '../utils/time';
 
 interface Props {
   blocks: Block[];
@@ -16,41 +16,39 @@ interface Props {
   onToggleComplete: (id: string) => void;
 }
 
-const PX_PER_MIN = 1.3; // 78 px / hour
+const PX_PER_MIN = 1.35;
 const SNAP = 5;
-const PAD_TOP = 14; // breathing room so the first hour label isn't clipped
+const PAD_TOP = 14;
+const BLOCK_RADIUS = 8;
 
+// Editorial ink-on-paper category styling
 const CAT_STYLE: Record<
   Category,
-  { gradient: string; border: string; text: string; accent: string; glow: string }
+  { bar: string; tint: string; ink: string; label: string }
 > = {
   deep: {
-    gradient: 'linear-gradient(135deg, rgba(139,92,246,0.28), rgba(99,102,241,0.18))',
-    border: 'rgba(167,139,250,0.45)',
-    text: '#ddd6fe',
-    accent: '#a78bfa',
-    glow: 'rgba(139,92,246,0.35)',
+    bar: '#7a2530',
+    tint: 'rgba(122,37,48,0.10)',
+    ink: '#4a131c',
+    label: 'Deep',
   },
   admin: {
-    gradient: 'linear-gradient(135deg, rgba(34,211,238,0.26), rgba(14,165,164,0.16))',
-    border: 'rgba(103,232,249,0.45)',
-    text: '#cffafe',
-    accent: '#22d3ee',
-    glow: 'rgba(34,211,238,0.30)',
+    bar: '#1f3b5d',
+    tint: 'rgba(31,59,93,0.10)',
+    ink: '#15263e',
+    label: 'Admin',
   },
   break: {
-    gradient: 'linear-gradient(135deg, rgba(245,158,11,0.26), rgba(217,119,6,0.16))',
-    border: 'rgba(252,211,77,0.45)',
-    text: '#fef3c7',
-    accent: '#f59e0b',
-    glow: 'rgba(245,158,11,0.28)',
+    bar: '#b07720',
+    tint: 'rgba(176,119,32,0.13)',
+    ink: '#6e4810',
+    label: 'Break',
   },
   other: {
-    gradient: 'linear-gradient(135deg, rgba(148,163,184,0.22), rgba(100,116,139,0.14))',
-    border: 'rgba(203,213,225,0.30)',
-    text: '#e2e8f0',
-    accent: '#94a3b8',
-    glow: 'rgba(148,163,184,0.22)',
+    bar: '#4a3d2e',
+    tint: 'rgba(74,61,46,0.08)',
+    ink: '#3a2e22',
+    label: 'Other',
   },
 };
 
@@ -186,45 +184,49 @@ export default function Timeline({
   }
 
   const showNow = isToday && nowMin >= visibleStart && nowMin <= visibleEnd;
+  const isEmpty = blocks.length === 0;
 
   return (
-    <div className="relative bg-bg-1/80 glass border border-line-1 rounded-xl5 shadow-soft p-5 h-full min-h-[640px] overflow-hidden flex flex-col">
-      <div className="absolute -top-24 -left-24 w-72 h-72 rounded-full bg-cat-deep/10 blur-3xl pointer-events-none" />
-      <div className="relative flex items-center justify-between mb-3 px-1">
-        <div className="flex items-center gap-2">
-          <h2 className="text-[11px] uppercase tracking-[0.14em] text-fg-4 font-medium">
-            Today's plan
+    <div className="relative paper-card rounded-xl5 p-5 h-full min-h-[480px] md:min-h-[640px] overflow-hidden flex flex-col">
+      <div className="relative flex items-end justify-between mb-3 px-1">
+        <div className="flex items-baseline gap-3">
+          <h2 className="font-display text-[20px] leading-none text-ink-1" style={{ fontVariationSettings: '"opsz" 144, "SOFT" 50', fontWeight: 500 }}>
+            The Schedule
           </h2>
-          <span className="text-[10px] text-fg-5 tnum">· {blocks.length} blocks</span>
+          <span className="font-mono text-[11px] tracking-wider text-ink-3 tnum">
+            {String(blocks.length).padStart(2, '0')} entries
+          </span>
         </div>
-        <p className="text-[10px] text-fg-5">
-          Drag · resize edges · click empty to add
+        <p className="text-[11px] text-ink-3">
+          drag · resize · click to add
         </p>
       </div>
+      <div className="rule-h mb-1" />
+
       <div className="relative flex-1 overflow-y-auto no-scrollbar -mx-1 px-1">
         <motion.div
           key={`timeline-${buildPulse}`}
           ref={ref}
           onClick={handleTimelineClick}
-          className="relative select-none timeline-bg surface-grid"
+          className="relative select-none timeline-bg"
           style={{ height: totalPx + 'px' }}
           initial={false}
         >
           {/* Working window highlight */}
           <motion.div
             layout
-            className="absolute left-14 right-0 pointer-events-none rounded-xl2 timeline-bg"
+            className="absolute left-14 right-0 pointer-events-none timeline-bg"
             style={{
               top: (workingStart - visibleStart) * PX_PER_MIN + PAD_TOP + 'px',
               height: (workingEnd - workingStart) * PX_PER_MIN + 'px',
               background:
-                'linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.012))',
-              borderLeft: '1px solid rgba(255,255,255,0.10)',
+                'linear-gradient(180deg, rgba(255,250,237,0.55), rgba(255,250,237,0.20))',
+              borderLeft: '1.5px solid rgba(28,20,11,0.32)',
             }}
             transition={{ type: 'spring', stiffness: 200, damping: 28 }}
           />
 
-          {/* Hour rows */}
+          {/* Hour rules */}
           {hours.map((h) => {
             const top = (h - visibleStart) * PX_PER_MIN + PAD_TOP;
             const isWorking = h >= workingStart && h < workingEnd;
@@ -235,18 +237,37 @@ export default function Timeline({
                 style={{ top: top + 'px', height: 60 * PX_PER_MIN + 'px' }}
               >
                 <span
-                  className={`text-[10px] tnum w-14 shrink-0 pr-2 -mt-1.5 ${
-                    isWorking ? 'text-fg-3' : 'text-fg-5'
+                  className={`font-mono text-[11px] tracking-wider tnum w-14 shrink-0 pr-2 -mt-1.5 text-right ${
+                    isWorking ? 'text-ink-2' : 'text-ink-4'
                   }`}
                 >
-                  {format12h(h)}
+                  {formatHourLabel(h)}
                 </span>
                 <div
-                  className={`flex-1 border-t timeline-bg ${
-                    isWorking ? 'border-white/[0.06]' : 'border-white/[0.03]'
-                  }`}
+                  className="flex-1 timeline-bg"
+                  style={{
+                    borderTop: isWorking
+                      ? '1px solid rgba(28,20,11,0.18)'
+                      : '1px dashed rgba(28,20,11,0.10)',
+                  }}
                 />
               </div>
+            );
+          })}
+
+          {/* Half-hour ticks */}
+          {hours.map((h) => {
+            const top = (h - visibleStart + 30) * PX_PER_MIN + PAD_TOP;
+            if (h + 30 > visibleEnd) return null;
+            return (
+              <div
+                key={`half-${h}`}
+                className="absolute left-14 w-2 pointer-events-none"
+                style={{
+                  top: top + 'px',
+                  borderTop: '1px dotted rgba(28,20,11,0.18)',
+                }}
+              />
             );
           })}
 
@@ -260,16 +281,48 @@ export default function Timeline({
               style={{ top: (nowMin - visibleStart) * PX_PER_MIN + PAD_TOP + 'px' }}
             >
               <span className="relative ml-1.5 flex items-center justify-center w-2 h-2">
-                <span className="absolute inset-0 rounded-full bg-rose-400 animate-pulseSoft" />
-                <span className="relative w-1.5 h-1.5 rounded-full bg-rose-400 shadow-[0_0_10px_#fb7185]" />
+                <span className="absolute inset-0 rounded-full bg-seal animate-sealPulse" />
+                <span
+                  className="relative w-1.5 h-1.5 rounded-full"
+                  style={{ background: '#9e3a26', boxShadow: '0 0 6px rgba(158,58,38,0.45)' }}
+                />
               </span>
               <span
                 className="flex-1 h-px"
                 style={{
                   background:
-                    'linear-gradient(to right, rgba(251,113,133,0.85), rgba(251,113,133,0.0))',
+                    'linear-gradient(to right, rgba(158,58,38,0.7), rgba(158,58,38,0.0) 85%)',
                 }}
               />
+              <span className="smallcaps text-[11px] text-seal mr-1 tnum">
+                Now
+              </span>
+            </motion.div>
+          )}
+
+          {/* Empty state */}
+          {isEmpty && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4, delay: 0.1 }}
+              className="absolute left-16 right-2 pointer-events-none flex flex-col items-center justify-center text-center px-6"
+              style={{
+                top: (workingStart - visibleStart) * PX_PER_MIN + PAD_TOP + 'px',
+                height: (workingEnd - workingStart) * PX_PER_MIN + 'px',
+              }}
+            >
+              <p
+                className="font-display italic text-[18px] text-ink-3 mb-1"
+                style={{ fontVariationSettings: '"opsz" 24, "SOFT" 80' }}
+              >
+                A blank page.
+              </p>
+              <p className="text-[12.5px] text-ink-3 max-w-[28ch] leading-relaxed">
+                Type tasks in <span className="font-medium text-ink-1">Morning intake</span>,
+                then press <span className="font-medium text-ink-1">Build my day</span> —
+                or click an hour to add a block by hand.
+              </p>
             </motion.div>
           )}
 
@@ -283,38 +336,35 @@ export default function Timeline({
               const height = (end - start) * PX_PER_MIN;
               const style = CAT_STYLE[b.category];
               const done = !!b.completed;
+
+              // Adaptive content tiers based on rendered block height:
+              //   tiny:    title only, time inline
+              //   compact: title + time, no category badge
+              //   full:    category badge + title + time
+              const tier: 'tiny' | 'compact' | 'full' =
+                height < 32 ? 'tiny' : height < 54 ? 'compact' : 'full';
+
               return (
                 <motion.div
                   key={b.id}
                   layout={!isDragging}
-                  initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                  initial={{ opacity: 0, y: -4 }}
                   animate={{
-                    opacity: done ? 0.55 : 1,
+                    opacity: done ? 0.6 : 1,
                     y: 0,
-                    scale: 1,
                   }}
-                  exit={{ opacity: 0, scale: 0.97 }}
+                  exit={{ opacity: 0, y: -4 }}
                   transition={{
                     type: 'spring',
-                    stiffness: 320,
-                    damping: 28,
-                    delay: isDragging ? 0 : Math.min(i * 0.025, 0.4),
+                    stiffness: 300,
+                    damping: 30,
+                    delay: isDragging ? 0 : Math.min(i * 0.02, 0.3),
                   }}
-                  className="absolute left-16 right-2 rounded-xl3 overflow-hidden cursor-grab active:cursor-grabbing group"
+                  className="absolute left-16 right-2 cursor-grab active:cursor-grabbing group"
                   style={{
                     top: top + 'px',
                     height: height + 'px',
-                    background: done
-                      ? 'linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015))'
-                      : style.gradient,
-                    border: `1px solid ${done ? 'rgba(255,255,255,0.10)' : style.border}`,
-                    boxShadow: isDragging
-                      ? `0 18px 44px ${style.glow}, 0 0 0 1px ${style.border}`
-                      : done
-                        ? '0 2px 10px rgba(0,0,0,0.25)'
-                        : `0 6px 18px ${style.glow}`,
                     zIndex: isDragging ? 10 : 2,
-                    backdropFilter: 'blur(6px)',
                   }}
                   whileHover={!isDragging ? { y: -1 } : undefined}
                   onPointerDown={(e) => startDrag(e, b, 'move')}
@@ -324,54 +374,119 @@ export default function Timeline({
                   }}
                 >
                   <div
-                    className="absolute top-0 left-0 right-0 h-1.5 cursor-ns-resize z-10"
-                    onPointerDown={(e) => startDrag(e, b, 'resize-top')}
-                  />
-                  <div
-                    className="absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize z-10"
-                    onPointerDown={(e) => startDrag(e, b, 'resize-bottom')}
-                  />
-                  <div
-                    className="absolute left-0 top-0 bottom-0 w-[3px]"
+                    className="relative h-full overflow-hidden"
                     style={{
-                      background: done ? 'rgba(255,255,255,0.18)' : style.accent,
-                      boxShadow: done ? undefined : `0 0 12px ${style.glow}`,
+                      background: done
+                        ? 'linear-gradient(180deg, rgba(28,20,11,0.04), rgba(28,20,11,0.02))'
+                        : `linear-gradient(180deg, ${style.tint}, ${style.tint} 70%, rgba(255,250,237,0.5))`,
+                      border: `1px solid ${
+                        done ? 'rgba(28,20,11,0.16)' : 'rgba(28,20,11,0.22)'
+                      }`,
+                      borderRadius: BLOCK_RADIUS + 'px',
+                      boxShadow: isDragging
+                        ? `0 14px 30px -10px rgba(28,20,11,0.35)`
+                        : '0 1px 0 rgba(255,250,237,0.5) inset, 0 2px 6px -2px rgba(28,20,11,0.10)',
                     }}
-                  />
-                  <div className="px-3 py-2 pl-9 h-full flex flex-col overflow-hidden">
+                  >
+                    {/* Resize handles — bigger hit area */}
                     <div
-                      className="text-[13px] font-medium leading-tight truncate"
+                      className="absolute top-0 left-0 right-0 cursor-ns-resize z-10"
+                      style={{ height: '8px' }}
+                      onPointerDown={(e) => startDrag(e, b, 'resize-top')}
+                    />
+                    <div
+                      className="absolute bottom-0 left-0 right-0 cursor-ns-resize z-10"
+                      style={{ height: '8px' }}
+                      onPointerDown={(e) => startDrag(e, b, 'resize-bottom')}
+                    />
+                    {/* Category accent bar — rounded to match block radius */}
+                    <div
+                      className="absolute left-0 top-0 bottom-0"
                       style={{
-                        color: done ? '#94a3b8' : style.text,
-                        textDecoration: done ? 'line-through' : undefined,
-                        textDecorationColor: done ? 'rgba(255,255,255,0.35)' : undefined,
+                        width: '3px',
+                        background: done ? 'rgba(28,20,11,0.28)' : style.bar,
+                        borderTopLeftRadius: BLOCK_RADIUS + 'px',
+                        borderBottomLeftRadius: BLOCK_RADIUS + 'px',
                       }}
-                    >
-                      {b.title}
-                    </div>
-                    <div
-                      className="text-[10.5px] mt-0.5 tnum tracking-wide opacity-80"
-                      style={{ color: done ? '#64748b' : style.text }}
-                    >
-                      {format12h(start)} – {format12h(end)}
+                    />
+
+                    {/* Content — adaptive layout */}
+                    {tier === 'tiny' ? (
+                      <div className="absolute inset-0 flex items-center pl-3 pr-14 gap-2">
+                        <span
+                          className="font-display text-[12.5px] leading-none truncate"
+                          style={{
+                            color: done ? '#867253' : style.ink,
+                            fontWeight: 500,
+                            fontVariationSettings: '"opsz" 24, "SOFT" 40',
+                            textDecoration: done ? 'line-through' : undefined,
+                            textDecorationColor: done ? 'rgba(28,20,11,0.4)' : undefined,
+                          }}
+                        >
+                          {b.title}
+                        </span>
+                        <span
+                          className="font-mono text-[10px] tnum tracking-wider shrink-0"
+                          style={{ color: done ? '#867253' : '#6b5739' }}
+                        >
+                          {format12h(start).toUpperCase()}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="px-3 pl-3.5 pt-2 pb-1.5 h-full flex flex-col overflow-hidden">
+                        {tier === 'full' && (
+                          <span
+                            className="smallcaps text-[10.5px] mb-0.5"
+                            style={{
+                              color: done ? '#867253' : style.bar,
+                              opacity: 0.9,
+                            }}
+                          >
+                            {style.label}
+                          </span>
+                        )}
+                        <div
+                          className="font-display text-[14px] leading-tight truncate pr-12"
+                          style={{
+                            color: done ? '#867253' : style.ink,
+                            fontWeight: 500,
+                            fontVariationSettings: '"opsz" 24, "SOFT" 40',
+                            textDecoration: done ? 'line-through' : undefined,
+                            textDecorationColor: done ? 'rgba(28,20,11,0.4)' : undefined,
+                            textDecorationThickness: '1px',
+                          }}
+                        >
+                          {b.title}
+                        </div>
+                        <div
+                          className="font-mono text-[10.5px] mt-0.5 tnum tracking-wider"
+                          style={{ color: done ? '#867253' : '#6b5739' }}
+                        >
+                          {format12h(start).toUpperCase()} – {format12h(end).toUpperCase()}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Always-visible action cluster (top-right) */}
+                    <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 z-20">
+                      <CompleteToggle
+                        done={done}
+                        accent={style.bar}
+                        onToggle={() => onToggleComplete(b.id)}
+                      />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditBlock(b.id);
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        aria-label="Edit block"
+                        className="grid place-items-center w-7 h-7 rounded-md text-ink-3 hover:text-ink-0 hover:bg-paper-4/80 opacity-50 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Pencil size={12} strokeWidth={1.7} />
+                      </button>
                     </div>
                   </div>
-                  <CompleteToggle
-                    done={done}
-                    accent={style.accent}
-                    glow={style.glow}
-                    onToggle={() => onToggleComplete(b.id)}
-                  />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEditBlock(b.id);
-                    }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="absolute top-1.5 right-1.5 px-2 py-0.5 text-[10px] rounded-full bg-white/10 hover:bg-white/20 text-white/90 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur"
-                  >
-                    Edit
-                  </button>
                 </motion.div>
               );
             })}
@@ -385,12 +500,10 @@ export default function Timeline({
 function CompleteToggle({
   done,
   accent,
-  glow,
   onToggle,
 }: {
   done: boolean;
   accent: string;
-  glow: string;
   onToggle: () => void;
 }) {
   return (
@@ -400,40 +513,43 @@ function CompleteToggle({
         e.stopPropagation();
         onToggle();
       }}
-      whileTap={{ scale: 0.85 }}
-      whileHover={{ scale: 1.1 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 18 }}
+      whileTap={{ scale: 0.88 }}
+      whileHover={{ scale: 1.06 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
       aria-label={done ? 'Mark as not done' : 'Mark as done'}
-      className="absolute top-2 left-2 w-5 h-5 rounded-full grid place-items-center z-20 transition-colors"
+      className="grid place-items-center"
       style={{
-        background: done ? accent : 'rgba(255,255,255,0.08)',
-        boxShadow: done
-          ? `0 0 14px ${glow}, inset 0 0 0 1px ${accent}`
-          : 'inset 0 0 0 1px rgba(255,255,255,0.18)',
+        width: '28px',
+        height: '28px',
+        borderRadius: '6px',
       }}
     >
-      <AnimatePresence initial={false} mode="wait">
-        {done ? (
-          <motion.span
-            key="check"
-            initial={{ scale: 0, rotate: -90 }}
-            animate={{ scale: 1, rotate: 0 }}
-            exit={{ scale: 0, rotate: 90 }}
-            transition={{ type: 'spring', stiffness: 500, damping: 22 }}
-          >
-            <Check size={12} className="text-white" strokeWidth={3} />
-          </motion.span>
-        ) : (
-          <motion.span
-            key="empty"
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-            exit={{ scale: 0 }}
-            transition={{ duration: 0.12 }}
-            className="block w-1.5 h-1.5 rounded-full bg-white/30"
-          />
-        )}
-      </AnimatePresence>
+      <span
+        className="grid place-items-center"
+        style={{
+          width: '18px',
+          height: '18px',
+          borderRadius: '5px',
+          background: done ? accent : 'rgba(255,250,237,0.85)',
+          boxShadow: done
+            ? `inset 0 0 0 1px ${accent}`
+            : `inset 0 0 0 1.5px rgba(28,20,11,0.36)`,
+        }}
+      >
+        <AnimatePresence initial={false} mode="wait">
+          {done && (
+            <motion.span
+              key="check"
+              initial={{ scale: 0, rotate: -90 }}
+              animate={{ scale: 1, rotate: 0 }}
+              exit={{ scale: 0, rotate: 90 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+            >
+              <Check size={11} className="text-paper-4" strokeWidth={3} />
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </span>
     </motion.button>
   );
 }

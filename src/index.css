@@ -1,17 +1,17 @@
-@import url('https://rsms.me/inter/inter.css');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
-  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  color-scheme: light;
+  /* Utility UI runs on Inter; display elements opt in to .font-display (Fraunces). */
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  color: #e5e7eb;
-  background: #08090d;
+  color: #322516;
+  background: #ede5d2;
 }
 
 html,
@@ -22,58 +22,118 @@ body,
 
 body {
   margin: 0;
-  background:
-    radial-gradient(1100px 600px at 15% -10%, rgba(139, 92, 246, 0.08), transparent 60%),
-    radial-gradient(900px 500px at 95% 110%, rgba(34, 211, 238, 0.05), transparent 60%),
-    #08090d;
-  background-attachment: fixed;
+  background-color: #ede5d2;
+  /* Soft parchment wash — no busy dot pattern in body */
+  background-image:
+    radial-gradient(1400px 900px at 18% -5%, rgba(254, 250, 235, 0.6), transparent 65%),
+    radial-gradient(1200px 700px at 100% 100%, rgba(160, 128, 70, 0.06), transparent 70%);
+  background-attachment: fixed, fixed;
 }
 
+/* Very subtle paper grain — just enough to feel like paper, not noise */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.14;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.40  0 0 0 0 0.32  0 0 0 0 0.20  0 0 0 0.26 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* Numeric tabular */
 .tnum {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
 }
 
-/* Subtle dotted grid background for the surface */
-.surface-grid {
-  background-image:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0);
-  background-size: 22px 22px;
+.font-display {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-feature-settings: 'ss01';
+  font-optical-sizing: auto;
 }
 
-.glass {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01));
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+.smallcaps {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-variant-caps: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  font-weight: 600;
+  font-size: 0.78em;
 }
 
-.shimmer {
-  background-image: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.10) 50%,
-    transparent
+/* Editorial small-caps via Fraunces — opt-in for decorative spots only. */
+.smallcaps-display {
+  font-family: 'Fraunces', ui-serif, serif;
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.10em;
+  font-weight: 500;
+}
+
+/* Hairline rule helper */
+.rule-h {
+  height: 1px;
+  background: rgba(50, 37, 22, 0.14);
+}
+.rule-h-dotted {
+  height: 1px;
+  background-image: linear-gradient(to right, rgba(50, 37, 22, 0.26) 50%, transparent 0);
+  background-size: 6px 1px;
+  background-repeat: repeat-x;
+}
+
+/* Ledger ruled paper for the intake textarea — softer lines */
+.ledger-lines {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 27px,
+    rgba(50, 37, 22, 0.07) 27px,
+    rgba(50, 37, 22, 0.07) 28px
   );
-  background-size: 200% 100%;
 }
 
-/* Scrollbars */
+/* Paper card with edge — softened */
+.paper-card {
+  background-color: #f7f0de;
+  background-image:
+    linear-gradient(180deg, rgba(254, 251, 241, 0.45), rgba(247, 240, 222, 0));
+  border: 1px solid rgba(50, 37, 22, 0.11);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 rgba(254, 251, 241, 0.65) inset,
+    0 1px 2px rgba(50, 37, 22, 0.04),
+    0 18px 36px -26px rgba(50, 37, 22, 0.22);
+}
+
+.paper-card-flat {
+  background-color: #f7f0de;
+  border: 1px solid rgba(50, 37, 22, 0.10);
+}
+
+/* Scrollbars (warm, soft) */
 .no-scrollbar::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 .no-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(50, 37, 22, 0.16);
   border-radius: 4px;
 }
 .no-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(50, 37, 22, 0.28);
 }
 .no-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 * {
-  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  scrollbar-color: rgba(50, 37, 22, 0.20) transparent;
   scrollbar-width: thin;
 }
 
@@ -84,29 +144,39 @@ input,
 select,
 textarea {
   font-family: inherit;
-  color-scheme: dark;
+  color: #322516;
 }
 
-/* Native date / time pickers — make them legible */
 input[type='date'],
 input[type='time'] {
-  color: #e5e7eb;
+  color: #322516;
+  font-variant-numeric: tabular-nums;
 }
 input[type='date']::-webkit-calendar-picker-indicator,
 input[type='time']::-webkit-calendar-picker-indicator {
-  filter: invert(0.8) brightness(1.1);
-  opacity: 0.65;
+  filter: sepia(0.55) saturate(0.55) brightness(0.55);
+  opacity: 0.6;
   cursor: pointer;
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.35);
-  color: #f8fafc;
+  background: rgba(156, 70, 52, 0.22);
+  color: #322516;
 }
 
-/* Focus ring helpers used in components */
+/* Focus ring (ink) */
 .focus-ring {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.25);
-  border-color: rgba(139, 92, 246, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(50, 37, 22, 0.28),
+    0 0 0 4px rgba(156, 70, 52, 0.12);
+  border-color: rgba(50, 37, 22, 0.34);
+}
+
+/* Wax-seal / stamp shadow used on primary CTA — softer */
+.stamp-shadow {
+  box-shadow:
+    0 0 0 1px rgba(156, 70, 52, 0.36),
+    0 1px 0 rgba(255, 225, 205, 0.4) inset,
+    0 8px 22px -10px rgba(156, 70, 52, 0.4);
 }

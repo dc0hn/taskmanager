@@ -54,6 +54,15 @@ export function format12h(min: number): string {
   return `${h}:${String(m).padStart(2, '0')} ${period}`;
 }
 
+// Hour-label display: "8 AM" for whole hours, "8:30 AM" otherwise.
+export function formatHourLabel(min: number): string {
+  const h24 = Math.floor(min / 60);
+  const m = min % 60;
+  const h = ((h24 + 11) % 12) + 1;
+  const p = h24 >= 12 ? 'PM' : 'AM';
+  return m === 0 ? `${h} ${p}` : `${h}:${String(m).padStart(2, '0')} ${p}`;
+}
+
 export function formatDuration(min: number): string {
   if (min < 60) return `${min}m`;
   const h = Math.floor(min / 60);
