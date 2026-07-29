@@ -1,9 +1,57 @@
-import type { Block, Category, Task } from './types';
+import type { Block, CategoryDef, CategoryKind, Task } from './types';
+import { uid } from './utils/id';
 
 interface Interval {
   start: number;
   end: number;
 }
+
+// ---------------------------------------------------------------------------
+// Category rules
+//
+// Categories are user-definable, so the scheduler can no longer reason about
+// them by id. What it needs is each category's *kind*, which is the stable
+// contract: a brand new "Music practice" category declared as `focus` inherits
+// morning priority and 90-minute chunking without this file knowing it exists.
+//
+// The algorithm below is otherwise unchanged — every previous `=== 'deep'` test
+// is now `kindOf(...) === 'focus'`, and the two synthetic blocks look up a
+// category to wear instead of hardcoding one.
+// ---------------------------------------------------------------------------
+
+export interface CategoryRules {
+  kindOf: (categoryId: string) => CategoryKind;
+  /** Category the auto-break blocks wear. */
+  restCategoryId: string;
+  /** Category the shutdown block wears. */
+  shallowCategoryId: string;
+}
+
+export function rulesFor(categories: CategoryDef[]): CategoryRules {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  const firstOfKind = (kind: CategoryKind) =>
+    [...categories].sort((a, b) => a.order - b.order).find((c) => c.kind === kind);
+
+  return {
+    kindOf: (id) => byId.get(id)?.kind ?? 'neutral',
+    restCategoryId: firstOfKind('rest')?.id ?? categories[0]?.id ?? 'other',
+    shallowCategoryId: firstOfKind('shallow')?.id ?? categories[0]?.id ?? 'other',
+  };
+}
+
+/** Used when no category list is supplied (tests, and any legacy call site). */
+const LEGACY_RULES: CategoryRules = {
+  kindOf: (id) =>
+    id === 'deep'
+      ? 'focus'
+      : id === 'admin'
+        ? 'shallow'
+        : id === 'break'
+          ? 'rest'
+          : 'neutral',
+  restCategoryId: 'break',
+  shallowCategoryId: 'admin',
+};
 
 // Tunables, derived from the practices in the README/research:
 //   - Newport / ultradian research: cap focused blocks at ~90 min and recover.
@@ -17,31 +65,34 @@ const BUFFER_PRE = 10; // minutes reserved before a fixed-time anchor
 const BUFFER_POST = 5; // minutes reserved after a fixed-time anchor
 const SHUTDOWN_LEN = 15; // synthetic close-of-day admin block
 
-function uid(): string {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-// Lower = scheduled earlier when other keys tie. Deep first, then admin,
-// then misc, then break — keeps same-category work batched together so the
+// Lower = scheduled earlier when other keys tie. Focus first, then shallow,
+// then neutral, then rest — keeps same-kind work batched together so the
 // scheduler doesn't whipsaw between contexts (Mark & Gonzalez: each switch
 // costs ~23 min of recovery cost).
-function categoryRank(c: Category): number {
-  return { deep: 0, admin: 1, other: 2, break: 3 }[c];
-}
+const KIND_RANK: Record<CategoryKind, number> = {
+  focus: 0,
+  shallow: 1,
+  neutral: 2,
+  rest: 3,
+};
 
 // Eat-the-frog + category batching + Parkinson's tight duration:
-//   1. high-priority deep tasks lead the queue (Mark Twain / Eisenhower Q2)
-//   2. then by category group, so same-category tasks cluster
-//   3. then priority within category
-//   4. then longer first — substantial work shouldn't be displaced by trivia
-function sortFlexible(tasks: Task[]): Task[] {
+//   1. high-priority focus tasks lead the queue (Mark Twain / Eisenhower Q2)
+//   2. then by kind group, so same-kind tasks cluster
+//   3. then by category id, so distinct categories of the same kind still batch
+//   4. then priority within category
+//   5. then longer first — substantial work shouldn't be displaced by trivia
+function sortFlexible(tasks: Task[], rules: CategoryRules): Task[] {
   return [...tasks].sort((a, b) => {
-    const aFrog = a.priority === 'high' && a.category === 'deep' ? 0 : 1;
-    const bFrog = b.priority === 'high' && b.category === 'deep' ? 0 : 1;
+    const aFrog = a.priority === 'high' && rules.kindOf(a.category) === 'focus' ? 0 : 1;
+    const bFrog = b.priority === 'high' && rules.kindOf(b.category) === 'focus' ? 0 : 1;
     if (aFrog !== bFrog) return aFrog - bFrog;
-    const ca = categoryRank(a.category);
-    const cb = categoryRank(b.category);
+    const ca = KIND_RANK[rules.kindOf(a.category)];
+    const cb = KIND_RANK[rules.kindOf(b.category)];
     if (ca !== cb) return ca - cb;
+    // Two different focus categories should still cluster with themselves rather
+    // than interleaving, so category id is a tiebreaker below kind.
+    if (a.category !== b.category) return a.category < b.category ? -1 : 1;
     const pa = a.priority === 'high' ? 0 : 1;
     const pb = b.priority === 'high' ? 0 : 1;
     if (pa !== pb) return pa - pb;
@@ -62,14 +113,14 @@ function subtractInterval(intervals: Interval[], start: number, end: number): In
   return out.filter((i) => i.end > i.start);
 }
 
-// Split long deep tasks into chunks ≤ 90 min so each block stays within the
+// Split long focus tasks into chunks ≤ 90 min so each block stays within the
 // ultradian focus envelope. The chunks fall back into the queue as separate
 // flex tasks; the 90-min auto-break logic will naturally space them.
-function splitLongDeep(tasks: Task[]): Task[] {
+function splitLongDeep(tasks: Task[], rules: CategoryRules): Task[] {
   const out: Task[] = [];
   for (const t of tasks) {
     if (
-      t.category === 'deep' &&
+      rules.kindOf(t.category) === 'focus' &&
       t.fixedTime == null &&
       t.duration >= DEEP_SPLIT_THRESHOLD
     ) {
@@ -97,6 +148,15 @@ function splitLongDeep(tasks: Task[]): Task[] {
 export interface ScheduleResult {
   blocks: Block[];
   overflow: Task[];
+  /**
+   * Why each overflowed task didn't fit, keyed by task id.
+   *
+   * This exists so the UI never has to say "didn't fit" without saying why. It
+   * is computed from state the algorithm already has — the free intervals and
+   * the anchor list — rather than being re-derived by the caller, which would
+   * duplicate the fitting logic and drift from it.
+   */
+  reasons: Record<string, string>;
 }
 
 // Build a one-day schedule out of the supplied tasks. Implements the practices
@@ -113,15 +173,21 @@ export function buildSchedule(
   tasks: Task[],
   workingStart: number,
   workingEnd: number,
-  preserved: Block[] = []
+  preserved: Block[] = [],
+  rules: CategoryRules = LEGACY_RULES
 ): ScheduleResult {
   if (workingEnd <= workingStart) {
-    return { blocks: [], overflow: tasks };
+    const reasons: Record<string, string> = {};
+    for (const t of tasks) {
+      reasons[t.id] = 'Your working hours are empty — set a start and end time.';
+    }
+    return { blocks: [], overflow: tasks, reasons };
   }
 
   let free: Interval[] = [{ start: workingStart, end: workingEnd }];
   const anchors: Block[] = [];
   const overflow: Task[] = [];
+  const reasons: Record<string, string> = {};
 
   // 0) Pre-existing blocks (kept from the prior schedule). These get no
   //    transition buffer — they were already laid out cleanly and we just
@@ -131,8 +197,8 @@ export function buildSchedule(
     free = subtractInterval(free, b.start, b.end);
   }
 
-  // 1) Pre-process — split deep work that overshoots the focus envelope.
-  const expanded = splitLongDeep(tasks);
+  // 1) Pre-process — split focus work that overshoots the focus envelope.
+  const expanded = splitLongDeep(tasks, rules);
 
   // 2) Place fixed-time anchors with transition buffers carved out of the
   //    surrounding free intervals so nothing schedules right against a
@@ -145,12 +211,21 @@ export function buildSchedule(
   for (const t of fixed) {
     const s = t.fixedTime!;
     const e = s + t.duration;
-    const conflicts = anchors.some((a) => !(e <= a.start || s >= a.end));
-    if (conflicts) {
+    const clash = anchors.find((a) => !(e <= a.start || s >= a.end));
+    if (clash) {
       overflow.push(t);
+      reasons[t.id] = `Its fixed time overlaps “${clash.title}”.`;
       continue;
     }
-    anchors.push({ id: t.id, title: t.title, start: s, end: e, category: t.category });
+    anchors.push({
+      id: t.id,
+      title: t.title,
+      start: s,
+      end: e,
+      category: t.category,
+      goalId: t.goalId,
+      templateId: t.templateId,
+    });
     const bufStart = Math.max(workingStart, s - BUFFER_PRE);
     const bufEnd = Math.min(workingEnd, e + BUFFER_POST);
     free = subtractInterval(free, bufStart, bufEnd);
@@ -172,7 +247,7 @@ export function buildSchedule(
         title: 'Shutdown',
         start: shutdownStart,
         end: shutdownEnd,
-        category: 'admin',
+        category: rules.shallowCategoryId,
         auto: true,
       });
       free = subtractInterval(free, shutdownStart, shutdownEnd);
@@ -180,7 +255,7 @@ export function buildSchedule(
   }
 
   // 4) Sort flexible tasks per the rules at the top, then fill chronologically.
-  const queue = sortFlexible(flexible);
+  const queue = sortFlexible(flexible, rules);
   const placed: Block[] = [];
   free.sort((a, b) => a.start - b.start);
 
@@ -205,7 +280,7 @@ export function buildSchedule(
             title: 'Break',
             start: cursor,
             end: breakEnd,
-            category: 'break',
+            category: rules.restCategoryId,
             auto: true,
           });
           cursor = breakEnd;
@@ -225,9 +300,11 @@ export function buildSchedule(
         start: cursor,
         end: cursor + t.duration,
         category: t.category,
+        goalId: t.goalId,
+        templateId: t.templateId,
       });
       cursor += t.duration;
-      if (t.category === 'break') {
+      if (rules.kindOf(t.category) === 'rest') {
         workSinceBreak = 0;
       } else {
         workSinceBreak += t.duration;
@@ -235,8 +312,34 @@ export function buildSchedule(
     }
   }
 
-  for (const t of queue) overflow.push(t);
-
+  // 6) Anything left could not be placed. Explain each one in terms of the
+  //    largest gap that was actually available, so "didn't fit" is never mute.
   const allBlocks = [...anchors, ...placed].sort((a, b) => a.start - b.start);
-  return { blocks: allBlocks, overflow };
+  if (queue.length > 0) {
+    const remaining = free.map((iv) => {
+      const taken = placed
+        .filter((b) => b.start >= iv.start && b.end <= iv.end)
+        .reduce((sum, b) => sum + (b.end - b.start), 0);
+      return iv.end - iv.start - taken;
+    });
+    const largestGap = remaining.length > 0 ? Math.max(...remaining, 0) : 0;
+
+    for (const t of queue) {
+      overflow.push(t);
+      reasons[t.id] =
+        largestGap <= 0
+          ? 'The day is already full.'
+          : `Needs ${fmt(t.duration)} but the largest gap left is ${fmt(largestGap)}.`;
+    }
+  }
+
+  return { blocks: allBlocks, overflow, reasons };
+}
+
+/** Compact duration for overflow messages: "45m", "1h", "2h 15m". */
+function fmt(min: number): string {
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }

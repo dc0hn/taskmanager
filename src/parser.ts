@@ -1,4 +1,4 @@
-import type { Category, Task } from './types';
+import type { Category, CategoryDef, Task } from './types';
 
 // Parse inline shorthand from a single line into a partial task.
 // Recognized:
@@ -8,9 +8,16 @@ import type { Category, Task } from './types';
 //   !high  high  p1                     -> priority high
 //   !normal  normal  p2                 -> priority normal
 //   #deep #admin #break #other          -> category
+//   #<any custom category>              -> category
 // The remaining text after stripping these tokens becomes the title.
 
-const CATEGORY_TOKENS: Record<string, Category> = {
+/**
+ * Convenience aliases for the shipped categories. These are additive — a token
+ * map is always built from the live category list too, so a custom "Music
+ * practice" category is addressable as #music-practice (its id) or #music (its
+ * short label) without anything being registered here.
+ */
+const BUILTIN_ALIASES: Record<string, Category> = {
   '#deep': 'deep',
   '#focus': 'deep',
   '#focused': 'deep',
@@ -21,6 +28,36 @@ const CATEGORY_TOKENS: Record<string, Category> = {
   '#lunch': 'break',
   '#other': 'other',
 };
+
+/**
+ * Build the `#token -> category id` map for a set of categories.
+ *
+ * Each category answers to its id, its short label, and its full label with
+ * spaces collapsed to hyphens. Builtin aliases fill in behind those, so a user
+ * who renames "Deep focus" to "Studio time" can still type #deep out of habit —
+ * unless they created a *new* category that legitimately claims that token, in
+ * which case the real category wins.
+ */
+export function buildCategoryTokens(
+  categories: CategoryDef[]
+): Record<string, Category> {
+  const map: Record<string, Category> = {};
+
+  // Aliases first, so live categories can override them below.
+  for (const [token, id] of Object.entries(BUILTIN_ALIASES)) {
+    if (categories.some((c) => c.id === id)) map[token] = id;
+  }
+
+  const slug = (s: string) =>
+    '#' + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+  for (const c of categories) {
+    for (const token of [slug(c.id), slug(c.short), slug(c.label)]) {
+      if (token.length > 1) map[token] = c.id;
+    }
+  }
+  return map;
+}
 
 const DURATION_PRESETS = [15, 30, 60, 90, 120];
 
@@ -81,7 +118,10 @@ function tryDuration(tok: string): number | null {
   return null;
 }
 
-export function parseTaskLine(line: string): Partial<Task> & { title: string } {
+export function parseTaskLine(
+  line: string,
+  categoryTokens: Record<string, Category> = BUILTIN_ALIASES
+): Partial<Task> & { title: string } {
   // Pre-pass: collapse "2pm to 4pm" into "2pm-4pm" so it's a single token.
   const collapsed = line.replace(
     /(@?\d{1,2}(?::\d{2})?(?:am|pm)?)\s+to\s+(\d{1,2}(?::\d{2})?(?:am|pm)?)/gi,
@@ -103,8 +143,8 @@ export function parseTaskLine(line: string): Partial<Task> & { title: string } {
     }
     // category
     const catKey = t.toLowerCase();
-    if (catKey in CATEGORY_TOKENS) {
-      result.category = CATEGORY_TOKENS[catKey];
+    if (catKey in categoryTokens) {
+      result.category = categoryTokens[catKey];
       continue;
     }
     // time range (sets both start time and duration)

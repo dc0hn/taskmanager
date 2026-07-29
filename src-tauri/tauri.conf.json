@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Almanac",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.dc0hn.almanac",
   "build": {
     "frontendDist": "../dist",
@@ -12,17 +12,20 @@
   "app": {
     "windows": [
       {
-        "title": "The Almanac",
-        "width": 1360,
-        "height": 880,
-        "minWidth": 900,
-        "minHeight": 600,
+        "title": "Almanac",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1040,
+        "minHeight": 640,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#0b0d12"
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

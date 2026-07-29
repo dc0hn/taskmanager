@@ -3,13 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>The Almanac · Day Planner</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..900,0..100,0..1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <title>Almanac — calendar &amp; task scheduler</title>
+    <meta name="color-scheme" content="dark" />
+    <!-- No remote fonts: the sans stack resolves to the system SF Pro and the
+         mono stack to SF Mono on macOS, so the app makes zero network calls.
+         The inline background matches the Tauri window colour so there is no
+         white flash between the window opening and React mounting. -->
+    <style>
+      html,
+      body {
+        background: #0b0d12;
+        margin: 0;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

@@ -1,76 +1,126 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trash2, X } from 'lucide-react';
-import { CATEGORIES } from '../types';
-import type { Block, Category } from '../types';
+import type { Block, CategoryDef, DayPlan } from '../types';
+import { colorsFor } from '../utils/color';
 import { minutesTo24h, parse24h } from '../utils/time';
 
-interface Props {
-  block: Block | null;
-  otherBlocks: Block[];
-  onClose: () => void;
-  onSave: (patch: Partial<Block>) => void;
-  onDelete: () => void;
+// ============================================================================
+// EditBlockModal
+//
+// Also the place a block can be moved to another day without dragging — useful
+// in day view, where there is no second column to drag into.
+//
+// This modal already set the standard for naming what went wrong rather than
+// silently refusing ("Overlaps “Client call”."); the rest of the app now follows
+// it via the toast.
+// ============================================================================
+
+export interface EditTarget {
+  date: string;
+  block: Block;
 }
 
-export default function EditBlockModal({ block, otherBlocks, onClose, onSave, onDelete }: Props) {
+interface Props {
+  target: EditTarget | null;
+  /** Every loaded day, so a move can be validated against its destination. */
+  plans: Record<string, DayPlan>;
+  categories: CategoryDef[];
+  onClose: () => void;
+  onSave: (date: string, id: string, patch: Partial<Block>, moveTo?: string) => void;
+  onDelete: (date: string, id: string) => void;
+}
+
+export default function EditBlockModal({
+  target,
+  plans,
+  categories,
+  onClose,
+  onSave,
+  onDelete,
+}: Props) {
   const [title, setTitle] = useState('');
+  const [date, setDate] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
-  const [category, setCategory] = useState<Category>('other');
+  const [category, setCategory] = useState('other');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (block) {
-      setTitle(block.title);
-      setStart(minutesTo24h(block.start));
-      setEnd(minutesTo24h(block.end));
-      setCategory(block.category);
-      setError(null);
-    }
-  }, [block]);
+    if (!target) return;
+    setTitle(target.block.title);
+    setDate(target.date);
+    setStart(minutesTo24h(target.block.start));
+    setEnd(minutesTo24h(target.block.end));
+    setCategory(target.block.category);
+    setError(null);
+  }, [target]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
     }
-    if (block) window.addEventListener('keydown', onKey);
+    if (target) window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [block, onClose]);
+  }, [target, onClose]);
 
   function save() {
+    if (!target) return;
     const s = parse24h(start);
     const e = parse24h(end);
     if (s == null || e == null) {
-      setError('Use HH:MM (24h)');
+      setError('Use HH:MM (24-hour).');
       return;
     }
     if (e <= s) {
-      setError('End time must be after start time.');
+      setError('The end time has to be after the start time.');
       return;
     }
-    const conflict = otherBlocks.find((b) => !(e <= b.start || s >= b.end));
-    if (conflict) {
-      setError(`Overlaps "${conflict.title}".`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError('That date is not valid.');
       return;
     }
-    onSave({ title: title.trim() || 'Untitled', start: s, end: e, category });
+
+    const moving = date !== target.date;
+    // On a move, every block on the destination day counts; staying put, the
+    // block being edited is excluded from its own overlap check.
+    const rivals = (plans[date]?.blocks ?? []).filter(
+      (b) => moving || b.id !== target.block.id
+    );
+    const clash = rivals.find((b) => !(e <= b.start || s >= b.end));
+    if (clash) {
+      setError(
+        moving
+          ? `That slot is taken on the new day — “${clash.title}” is already there.`
+          : `Overlaps “${clash.title}”.`
+      );
+      return;
+    }
+
+    onSave(
+      target.date,
+      target.block.id,
+      { title: title.trim() || 'Untitled', start: s, end: e, category },
+      moving ? date : undefined
+    );
   }
+
+  const sorted = [...categories].sort((a, b) => a.order - b.order);
 
   return (
     <AnimatePresence>
-      {block && (
+      {target && (
         <motion.div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
+          transition={{ duration: 0.14 }}
         >
           <motion.div
             className="absolute inset-0"
             style={{
-              background: 'rgba(28, 20, 11, 0.58)',
+              background: 'rgba(8, 8, 7, 0.70)',
               backdropFilter: 'blur(8px)',
               WebkitBackdropFilter: 'blur(8px)',
             }}
@@ -80,96 +130,108 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
             initial={{ y: 12, opacity: 0, scale: 0.98 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 8, opacity: 0, scale: 0.98 }}
-            transition={{ type: 'spring', stiffness: 360, damping: 28 }}
-            className="relative paper-card rounded-xl5 w-full max-w-md p-6 shadow-lift"
+            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+            className="relative raised rounded-xl6 w-full max-w-md p-5 shadow-lift"
           >
-            <div className="relative flex items-baseline justify-between mb-4">
-              <div>
-                <p className="smallcaps text-[11px] text-ink-3 mb-0.5">Edit entry</p>
-                <h3 className="font-display italic text-[22px] text-ink-0 leading-tight" style={{ fontVariationSettings: '"opsz" 144, "SOFT" 80' }}>
+            <div className="flex items-start justify-between mb-3 gap-3">
+              <div className="min-w-0">
+                <p className="smallcaps text-[9.5px] text-bone-3 mb-1">Edit entry</p>
+                <h3 className="font-display text-[19px] text-ink-0 leading-tight truncate font-semibold">
                   {title || 'Untitled'}
                 </h3>
               </div>
               <button
                 onClick={onClose}
-                className="grid place-items-center w-8 h-8 rounded-md text-ink-3 hover:text-ink-0 hover:bg-paper-3 transition-colors"
                 aria-label="Close"
+                className="grid place-items-center w-7 h-7 rounded-lg text-ink-3 hover:text-ink-0 hover:bg-paper-4 transition-colors shrink-0"
               >
-                <X size={16} strokeWidth={1.6} />
+                <X size={15} strokeWidth={2} />
               </button>
             </div>
-            <div className="rule-h mb-5" />
+            <div className="rule-h mb-4" />
 
-            <div className="relative space-y-4">
+            <div className="space-y-3.5">
               <div>
-                <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
-                  Title
-                </label>
+                <Label>Title</Label>
                 <input
                   autoFocus
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full font-display text-[14px] rounded border border-rule-2 bg-paper-4 px-2.5 py-2 text-ink-0 focus:outline-none focus:focus-ring"
-                  style={{ fontVariationSettings: '"opsz" 24, "SOFT" 40' }}
+                  className="input w-full text-[13.5px] px-2.5 py-2 focus:outline-none"
                 />
               </div>
+
+              <div>
+                <Label>Day</Label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="input w-full font-mono text-[12.5px] px-2.5 py-2 tnum focus:outline-none"
+                />
+                {target && date !== target.date && (
+                  <p className="text-[11px] text-accent-bright mt-1">
+                    This will move the entry to another day.
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
-                    Start
-                  </label>
+                  <Label>Start</Label>
                   <input
                     type="time"
                     value={start}
                     onChange={(e) => setStart(e.target.value)}
-                    className="w-full font-mono text-[13px] rounded border border-rule-2 bg-paper-4 px-2.5 py-2 tnum text-ink-0 focus:outline-none focus:focus-ring"
+                    className="input w-full font-mono text-[12.5px] px-2.5 py-2 tnum focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
-                    End
-                  </label>
+                  <Label>End</Label>
                   <input
                     type="time"
                     value={end}
                     onChange={(e) => setEnd(e.target.value)}
-                    className="w-full font-mono text-[13px] rounded border border-rule-2 bg-paper-4 px-2.5 py-2 tnum text-ink-0 focus:outline-none focus:focus-ring"
+                    className="input w-full font-mono text-[12.5px] px-2.5 py-2 tnum focus:outline-none"
                   />
                 </div>
               </div>
+
               <div>
-                <label className="text-[11px] font-medium uppercase tracking-wider text-ink-3 block mb-1.5">
-                  Category
-                </label>
+                <Label>Category</Label>
                 <div className="flex flex-wrap gap-1.5">
-                  {CATEGORIES.map((c) => {
-                    const active = category === c.id;
+                  {sorted.map((cat) => {
+                    const active = category === cat.id;
+                    const c = colorsFor(cat.accent);
                     return (
                       <button
-                        key={c.id}
-                        onClick={() => setCategory(c.id)}
-                        className="text-[11.5px] font-medium px-3 py-1.5 rounded inline-flex items-center gap-1.5 border tracking-wide uppercase transition-all"
+                        key={cat.id}
+                        onClick={() => setCategory(cat.id)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11.5px] font-medium transition-all"
                         style={{
-                          background: active ? c.bg : 'rgba(255,250,237,0.45)',
-                          borderColor: active ? c.accent : 'rgba(28,20,11,0.18)',
-                          color: active ? c.accent : '#3a2c1c',
+                          background: active ? c.fillStrong : 'rgba(245, 242, 236,0.035)',
+                          border: `1px solid ${active ? c.line : 'var(--rule-2)'}`,
+                          color: active ? c.text : 'var(--bone-3)',
                         }}
                       >
-                        <span className="w-1.5 h-1.5 rounded-sm" style={{ background: c.accent }} />
-                        {c.label}
+                        <span
+                          className="w-1.5 h-1.5 rounded-full"
+                          style={{ background: cat.accent }}
+                        />
+                        {cat.label}
                       </button>
                     );
                   })}
                 </div>
               </div>
+
               <AnimatePresence>
                 {error && (
                   <motion.p
                     initial={{ opacity: 0, y: -3 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
-                    className="font-display italic text-[12.5px] text-seal"
-                    style={{ fontVariationSettings: '"opsz" 14, "SOFT" 80' }}
+                    className="text-[12.5px] text-bad leading-snug"
                   >
                     {error}
                   </motion.p>
@@ -177,18 +239,18 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
               </AnimatePresence>
             </div>
 
-            <div className="relative flex items-center justify-between mt-5 pt-4 border-t border-rule-3">
+            <div className="flex items-center justify-between mt-5 pt-3.5 border-t border-rule-2">
               <button
-                onClick={onDelete}
-                className="inline-flex items-center gap-1.5 smallcaps text-[12px] text-seal hover:text-ink-0 hover:bg-paper-3 px-2.5 py-2 rounded-md transition-colors min-h-[36px]"
+                onClick={() => target && onDelete(target.date, target.block.id)}
+                className="inline-flex items-center gap-1.5 text-[12px] font-medium text-bad hover:bg-bad-soft px-2.5 py-2 rounded-lg transition-colors"
               >
-                <Trash2 size={13} strokeWidth={1.7} />
-                Delete entry
+                <Trash2 size={13} strokeWidth={1.9} />
+                Delete
               </button>
               <div className="flex items-center gap-2">
                 <button
                   onClick={onClose}
-                  className="smallcaps text-[12px] text-ink-3 hover:text-ink-1 hover:bg-paper-3 px-3 py-2 rounded-md transition-colors min-h-[36px]"
+                  className="text-[12px] font-medium text-ink-3 hover:text-ink-0 px-3 py-2 rounded-lg transition-colors"
                 >
                   Cancel
                 </button>
@@ -196,11 +258,7 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={save}
-                  className="smallcaps text-[12px] text-paper-4 px-4 py-2 rounded-md stamp-shadow min-h-[36px]"
-                  style={{
-                    background:
-                      'linear-gradient(180deg, #b14935 0%, #9e3a26 55%, #832c1b 100%)',
-                  }}
+                  className="btn-primary text-[12.5px] font-semibold px-4 py-2 rounded-lg"
                 >
                   Save
                 </motion.button>
@@ -210,5 +268,11 @@ export default function EditBlockModal({ block, otherBlocks, onClose, onSave, on
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <label className="smallcaps text-[9px] text-bone-3 block mb-1.5">{children}</label>
   );
 }
