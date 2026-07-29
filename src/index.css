@@ -1,17 +1,111 @@
+@import './styles/fonts.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================================
+   Almanac — "Instrument"
+
+   A precision tool with an editorial spine, not a dashboard.
+
+   Three rules govern everything below:
+
+   1. ONE SIGNAL COLOUR. The chassis is warm graphite; the only colour that
+      means "live" is amber. Primary actions are bone white. There are no
+      gradients — a gradient on a control is decoration pretending to be depth.
+
+   2. STRUCTURE COMES FROM RULES, NOT BOXES. An almanac organises itself with
+      hairlines and whitespace. Nested rounded cards read as assembled; ruled
+      columns read as printed. Radii stay under 6px so nothing looks like a
+      pill.
+
+   3. CATEGORY COLOUR IS ANNOTATION. Categories mark the margin — a 2px rule and
+      a small-caps label. They never fill a surface loudly enough to compete
+      with the amber signal.
+   ============================================================================ */
+
 :root {
-  color-scheme: light;
-  /* Utility UI runs on Inter; display elements opt in to .font-display (Fraunces). */
-  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-feature-settings: 'cv11', 'ss01';
-  font-optical-sizing: auto;
+  color-scheme: dark;
+
+  /* ---- chassis: warm graphite, deliberately not blue-black ---------------- */
+  --chassis-0: #0d0d0c; /* page */
+  --chassis-1: #131312; /* rail, recessed */
+  --chassis-2: #191918; /* raised surface */
+  --chassis-3: #21211f; /* hover */
+  --chassis-4: #2a2a27; /* input, pressed */
+  --chassis-5: #35342f; /* active */
+
+  /* ---- bone: text ramp, warm off-white ------------------------------------
+     Every step down to bone-3 is verified against the chassis for WCAG AA at
+     small sizes (4.5:1). The ramp was originally a step darker and three things
+     failed — 10px legends at 3.6:1, completed block titles at 3.3:1 and the
+     toolbar subtitle at 2.1:1. bone-4 and bone-5 are DECORATION ONLY: rules,
+     tally marks, disabled glyphs. Never put text on them.
+
+       bone-1 on chassis-0  13.7:1
+       bone-2 on chassis-0   7.7:1
+       bone-3 on chassis-0   5.3:1
+       bone-3 on a block     4.8:1
+     ------------------------------------------------------------------------ */
+  --bone-0: #f5f2ec; /* display, headings */
+  --bone-1: #ddd8ce; /* body */
+  --bone-2: #a8a29a; /* secondary */
+  --bone-3: #8b857c; /* muted — the floor for anything readable */
+  --bone-4: #5c5750; /* decoration only, not text */
+  --bone-5: #3d3a35; /* rules, tally marks */
+
+  /* ---- rules: warm white at low alpha ------------------------------------ */
+  --rule-1: rgba(245, 242, 236, 0.055);
+  --rule-2: rgba(245, 242, 236, 0.095);
+  --rule-3: rgba(245, 242, 236, 0.16);
+  --rule-4: rgba(245, 242, 236, 0.3);
+
+  /* ---- the one signal colour --------------------------------------------- */
+  --signal: #ffb01f;
+  --signal-bright: #ffc65a;
+  --signal-dim: rgba(255, 176, 31, 0.13);
+  --signal-line: rgba(255, 176, 31, 0.4);
+
+  /* ---- primary action: bone, no gradient --------------------------------- */
+  --action: #f0ece3;
+  --action-hover: #fffdf8;
+  --action-ink: #14140f;
+
+  /* ---- state ------------------------------------------------------------- */
+  --good: #6fbf8b;
+  --bad: #e0685f;
+  --flag: #e8944a;
+
+  /* ---- type scale -------------------------------------------------------- */
+  --t-display: 2.75rem; /* 44px — masthead */
+  --t-display-sm: 1.875rem; /* 30px */
+  --t-title: 1.1875rem; /* 19px */
+  --t-heading: 1rem; /* 16px */
+  --t-body: 0.875rem; /* 14px */
+  --t-body-sm: 0.8125rem; /* 13px */
+  --t-micro: 0.6875rem; /* 11px */
+  --t-nano: 0.625rem; /* 10px */
+
+  /* ---- spacing scale: strict 4px base ------------------------------------ */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-6: 1.5rem;
+  --s-8: 2rem;
+  --s-12: 3rem;
+  --s-16: 4rem;
+
+  --titlebar-h: 28px;
+
+  font-family: 'Instrument Sans Variable', 'Instrument Sans', -apple-system,
+    system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  color: #322516;
-  background: #ede5d2;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+  color: var(--bone-1);
+  background: var(--chassis-0);
 }
 
 html,
@@ -22,161 +116,336 @@ body,
 
 body {
   margin: 0;
-  background-color: #ede5d2;
-  /* Soft parchment wash — no busy dot pattern in body */
-  background-image:
-    radial-gradient(1400px 900px at 18% -5%, rgba(254, 250, 235, 0.6), transparent 65%),
-    radial-gradient(1200px 700px at 100% 100%, rgba(160, 128, 70, 0.06), transparent 70%);
-  background-attachment: fixed, fixed;
-}
-
-/* Very subtle paper grain — just enough to feel like paper, not noise */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.14;
-  mix-blend-mode: multiply;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.40  0 0 0 0 0.32  0 0 0 0 0.20  0 0 0 0.26 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-color: var(--chassis-0);
+  /* One barely-there warm wash off the top-left. Not a gradient blob — it exists
+     so the flat black doesn't read as dead, and it is invisible if you look for
+     it directly. */
+  background-image: radial-gradient(
+    1100px 620px at 8% -12%,
+    rgba(255, 176, 31, 0.035),
+    transparent 64%
+  );
+  background-attachment: fixed;
+  overflow: hidden;
 }
 
 #root {
   position: relative;
   z-index: 1;
+  height: 100%;
 }
 
-/* Numeric tabular */
+/* ---------------------------------------------------------------------------
+   Typography
+   --------------------------------------------------------------------------- */
+
+/* Display — the editorial voice. Instrument Serif is narrow and high-contrast,
+   so it wants negative tracking and a tight leading at large sizes. */
+.font-display {
+  font-family: 'Instrument Serif', ui-serif, Georgia, serif;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 0.98;
+}
+
+.font-display-italic {
+  font-family: 'Instrument Serif', ui-serif, Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+
+.font-ui {
+  font-family: 'Instrument Sans Variable', 'Instrument Sans', -apple-system,
+    system-ui, sans-serif;
+}
+
+.font-mono,
 .tnum {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum';
+  font-feature-settings: 'tnum' 1;
 }
 
-.font-display {
-  font-family: 'Fraunces', ui-serif, Georgia, serif;
-  font-feature-settings: 'ss01';
-  font-optical-sizing: auto;
+.font-mono {
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace,
+    SFMono-Regular, Menlo, monospace;
 }
 
-.smallcaps {
-  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  font-variant-caps: normal;
+/* Engraved micro-label — the instrument-panel legend. Used for category names,
+   section eyebrows, axis units. */
+.legend {
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
   text-transform: uppercase;
-  letter-spacing: 0.10em;
-  font-weight: 600;
+  letter-spacing: 0.14em;
+  font-weight: 500;
+  font-size: var(--t-nano);
+  color: var(--bone-3);
+}
+
+/* Kept as an alias so existing markup doesn't break mid-refactor. */
+.smallcaps {
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  font-weight: 500;
   font-size: 0.78em;
 }
 
-/* Editorial small-caps via Fraunces — opt-in for decorative spots only. */
-.smallcaps-display {
-  font-family: 'Fraunces', ui-serif, serif;
-  font-variant-caps: all-small-caps;
-  letter-spacing: 0.10em;
-  font-weight: 500;
-}
+/* ---------------------------------------------------------------------------
+   Surfaces
 
-/* Hairline rule helper */
-.rule-h {
-  height: 1px;
-  background: rgba(50, 37, 22, 0.14);
-}
-.rule-h-dotted {
-  height: 1px;
-  background-image: linear-gradient(to right, rgba(50, 37, 22, 0.26) 50%, transparent 0);
-  background-size: 6px 1px;
-  background-repeat: repeat-x;
-}
+   `.panel` is intentionally NOT a card. It has no full border and no drop
+   shadow — it is a region of the chassis separated by a rule. Stacking three of
+   these reads as a printed table; stacking three cards reads as a template.
+   --------------------------------------------------------------------------- */
 
-/* Ledger ruled paper for the intake textarea — softer lines */
-.ledger-lines {
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent 27px,
-    rgba(50, 37, 22, 0.07) 27px,
-    rgba(50, 37, 22, 0.07) 28px
-  );
-}
-
-/* Paper card with edge — softened */
-.paper-card {
-  background-color: #f7f0de;
-  background-image:
-    linear-gradient(180deg, rgba(254, 251, 241, 0.45), rgba(247, 240, 222, 0));
-  border: 1px solid rgba(50, 37, 22, 0.11);
-  border-radius: 14px;
-  box-shadow:
-    0 1px 0 rgba(254, 251, 241, 0.65) inset,
-    0 1px 2px rgba(50, 37, 22, 0.04),
-    0 18px 36px -26px rgba(50, 37, 22, 0.22);
-}
-
-.paper-card-flat {
-  background-color: #f7f0de;
-  border: 1px solid rgba(50, 37, 22, 0.10);
-}
-
-/* Scrollbars (warm, soft) */
-.no-scrollbar::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-.no-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(50, 37, 22, 0.16);
-  border-radius: 4px;
-}
-.no-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(50, 37, 22, 0.28);
-}
-.no-scrollbar::-webkit-scrollbar-track {
+.panel {
   background: transparent;
 }
-* {
-  scrollbar-color: rgba(50, 37, 22, 0.20) transparent;
-  scrollbar-width: thin;
+
+.panel + .panel {
+  border-top: 1px solid var(--rule-2);
 }
 
-button {
-  font-family: inherit;
-}
-input,
-select,
-textarea {
-  font-family: inherit;
-  color: #322516;
+/* For the few places that genuinely need to float above the page — modals, the
+   toast, popovers. Everything else uses .panel. */
+.raised {
+  background: var(--chassis-2);
+  border: 1px solid var(--rule-2);
+  box-shadow:
+    0 1px 0 rgba(245, 242, 236, 0.03) inset,
+    0 24px 60px -24px rgba(0, 0, 0, 0.9);
 }
 
-input[type='date'],
-input[type='time'] {
-  color: #322516;
-  font-variant-numeric: tabular-nums;
+/* A framed region: the calendar grid. One hairline, square-ish corners. */
+.framed {
+  background: var(--chassis-1);
+  border: 1px solid var(--rule-2);
+  border-radius: 6px;
 }
+
+/* A row in a list. Sits on the page and is separated from its neighbours by a
+   single rule — the almanac table again. Replaces what used to be a card per
+   row, which stacked boxes inside a boxed page. */
+.ruled-row {
+  padding: var(--s-3) var(--s-4) var(--s-3) var(--s-3);
+  border-bottom: 1px solid var(--rule-1);
+  background: transparent;
+  transition: background 0.14s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.ruled-row:hover {
+  background: rgba(245, 242, 236, 0.022);
+}
+
+.ruled-row:last-child {
+  border-bottom: none;
+}
+
+/* An inline form: a recessed well, not a floating card. Reads as a drawer that
+   opened in place. */
+.form-well {
+  background: var(--chassis-1);
+  border: 1px solid var(--rule-2);
+  border-left: 2px solid var(--signal-line);
+  border-radius: 0 5px 5px 0;
+  padding: var(--s-4);
+}
+
+.rule-h {
+  height: 1px;
+  background: var(--rule-2);
+}
+
+.rule-h-strong {
+  height: 1px;
+  background: var(--rule-3);
+}
+
+/* ---------------------------------------------------------------------------
+   Controls
+   --------------------------------------------------------------------------- */
+
+.btn-primary {
+  background: var(--action);
+  color: var(--action-ink);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-weight: 600;
+  transition:
+    background 0.14s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.14s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--action-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.btn-primary:disabled {
+  background: var(--chassis-3);
+  color: var(--bone-4);
+  cursor: not-allowed;
+}
+
+.btn-quiet {
+  color: var(--bone-2);
+  border: 1px solid var(--rule-2);
+  background: transparent;
+  border-radius: 5px;
+  transition:
+    background 0.14s cubic-bezier(0.2, 0.7, 0.2, 1),
+    color 0.14s cubic-bezier(0.2, 0.7, 0.2, 1),
+    border-color 0.14s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.btn-quiet:hover {
+  color: var(--bone-0);
+  background: var(--chassis-3);
+  border-color: var(--rule-3);
+}
+
+.input {
+  background: var(--chassis-1);
+  border: 1px solid var(--rule-2);
+  color: var(--bone-0);
+  border-radius: 4px;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.input:hover {
+  border-color: var(--rule-3);
+}
+
+.input:focus {
+  background: var(--chassis-2);
+}
+
+.input::placeholder {
+  color: var(--bone-4);
+}
+
+/* Segmented control — machined, engraved, no pill. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 1px;
+  border-radius: 5px;
+  background: var(--chassis-1);
+  border: 1px solid var(--rule-2);
+}
+
+.segmented-item {
+  border-radius: 3px;
+  padding: 4px 11px;
+  font-size: var(--t-body-sm);
+  font-weight: 500;
+  color: var(--bone-3);
+  transition:
+    background 0.16s cubic-bezier(0.2, 0.7, 0.2, 1),
+    color 0.16s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.segmented-item:hover {
+  color: var(--bone-1);
+}
+
+.segmented-item[data-active='true'] {
+  background: var(--chassis-4);
+  color: var(--bone-0);
+  box-shadow: 0 1px 0 rgba(245, 242, 236, 0.05) inset;
+}
+
+/* Focus: amber hairline, no glow halo. */
+.focus-ring,
+*:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--chassis-0),
+    0 0 0 2px var(--signal-line);
+}
+
 input[type='date']::-webkit-calendar-picker-indicator,
 input[type='time']::-webkit-calendar-picker-indicator {
-  filter: sepia(0.55) saturate(0.55) brightness(0.55);
-  opacity: 0.6;
+  filter: invert(0.68) sepia(0.2);
   cursor: pointer;
 }
 
-::selection {
-  background: rgba(156, 70, 52, 0.22);
-  color: #322516;
+/* Ruled intake box — one hairline per text row, like a ledger. */
+.ledger-lines {
+  background-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(1.75rem - 1px),
+    var(--rule-1) calc(1.75rem - 1px),
+    var(--rule-1) 1.75rem
+  );
+  background-size: 100% 1.75rem;
+  background-attachment: local;
 }
 
-/* Focus ring (ink) */
-.focus-ring {
-  outline: none;
-  box-shadow:
-    0 0 0 1px rgba(50, 37, 22, 0.28),
-    0 0 0 4px rgba(156, 70, 52, 0.12);
-  border-color: rgba(50, 37, 22, 0.34);
+/* ---------------------------------------------------------------------------
+   Scrollbars — present, recessive
+   --------------------------------------------------------------------------- */
+
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
-/* Wax-seal / stamp shadow used on primary CTA — softer */
-.stamp-shadow {
-  box-shadow:
-    0 0 0 1px rgba(156, 70, 52, 0.36),
-    0 1px 0 rgba(255, 225, 205, 0.4) inset,
-    0 8px 22px -10px rgba(156, 70, 52, 0.4);
+.thin-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--rule-3);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--rule-4);
+  background-clip: content-box;
+}
+
+/* ---------------------------------------------------------------------------
+   Window chrome — traffic lights sit on the rail
+   --------------------------------------------------------------------------- */
+
+.titlebar-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+  height: var(--titlebar-h);
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* ---------------------------------------------------------------------------
+   Motion
+
+   Framer Motion drives everything meaningful and honours prefers-reduced-motion
+   in JS (see src/utils/motion.ts) — a CSS override alone would not touch it.
+   This block covers the handful of pure-CSS transitions above.
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
