@@ -5,10 +5,14 @@ import {
   reflowInsert,
   reflowPlace,
   reflowRemove,
+  DAY_END,
 } from './reflow';
 import type { Block } from './types';
 
-const DAY_END = 19 * 60; // 1140
+// The working day's end, passed as `workingEnd`. Distinct from reflow's DAY_END,
+// which is the midnight ceiling — spill past this is allowed and narrated, spill past
+// midnight is refused.
+const WORKING_END = 19 * 60; // 1140
 
 const b = (
   id: string,
@@ -42,7 +46,7 @@ describe('reflowPlace — making room', () => {
   it('pushes a colliding block down by the minimum that clears it', () => {
     const day = [b('move', 480, 540), b('x', 600, 660)];
     // Drop `move` onto `x`.
-    const r = reflowPlace(day, 'move', 600, 660, DAY_END);
+    const r = reflowPlace(day, 'move', 600, 660, WORKING_END);
     expect(r.ok).toBe(true);
     expect(shape(r.blocks)).toEqual(['move:600-660', 'x:660-720']);
     expect(r.movedIds).toEqual(['x']);
@@ -51,7 +55,7 @@ describe('reflowPlace — making room', () => {
   it('moves nothing when the destination already has room', () => {
     // A 45-minute block into a 60-minute gap: existing breathing room survives.
     const day = [b('move', 480, 525), b('x', 600, 660), b('y', 720, 780)];
-    const r = reflowPlace(day, 'move', 660, 705, DAY_END);
+    const r = reflowPlace(day, 'move', 660, 705, WORKING_END);
     expect(r.ok).toBe(true);
     expect(r.movedIds).toEqual([]);
     expect(shape(r.blocks)).toEqual(['x:600-660', 'move:660-705', 'y:720-780']);
@@ -59,7 +63,7 @@ describe('reflowPlace — making room', () => {
 
   it('cascades down a back-to-back chain', () => {
     const day = [b('move', 900, 960), b('x', 600, 660), b('y', 660, 720)];
-    const r = reflowPlace(day, 'move', 600, 660, DAY_END);
+    const r = reflowPlace(day, 'move', 600, 660, WORKING_END);
     expect(r.ok).toBe(true);
     expect(shape(r.blocks)).toEqual(['move:600-660', 'x:660-720', 'y:720-780']);
     expect(r.movedIds.sort()).toEqual(['x', 'y']);
@@ -68,7 +72,7 @@ describe('reflowPlace — making room', () => {
   it('stops cascading as soon as there is room', () => {
     // x gets pushed 30 min into the gap before y; y never needs to move.
     const day = [b('move', 900, 960), b('x', 600, 660), b('y', 780, 840)];
-    const r = reflowPlace(day, 'move', 630, 690, DAY_END);
+    const r = reflowPlace(day, 'move', 630, 690, WORKING_END);
     expect(r.ok).toBe(true);
     expect(at(r.blocks, 'x')).toMatchObject({ start: 690, end: 750 });
     expect(at(r.blocks, 'y')).toMatchObject({ start: 780, end: 840 });
@@ -78,7 +82,7 @@ describe('reflowPlace — making room', () => {
   it('pushes a partial overlap only as far as the overlap', () => {
     const day = [b('move', 900, 960), b('x', 600, 660)];
     // Overlaps x's first 30 minutes.
-    const r = reflowPlace(day, 'move', 570, 630, DAY_END);
+    const r = reflowPlace(day, 'move', 570, 630, WORKING_END);
     expect(at(r.blocks, 'x')).toMatchObject({ start: 630, end: 690 });
   });
 });
@@ -87,7 +91,7 @@ describe('reflowPlace — closing the vacated slot', () => {
   it('slides an adjacent run up to fill the hole', () => {
     const day = [b('move', 480, 540), b('x', 540, 600), b('y', 600, 660)];
     // Move the first block far away; the run behind it compacts by 60.
-    const r = reflowPlace(day, 'move', 900, 960, DAY_END);
+    const r = reflowPlace(day, 'move', 900, 960, WORKING_END);
     expect(r.ok).toBe(true);
     expect(shape(r.blocks)).toEqual(['x:480-540', 'y:540-600', 'move:900-960']);
   });
@@ -96,7 +100,7 @@ describe('reflowPlace — closing the vacated slot', () => {
   // drag an afternoon meeting into the morning.
   it('does NOT pull up a block separated by real empty time', () => {
     const day = [b('move', 480, 540), b('meeting', 840, 900)];
-    const r = reflowPlace(day, 'move', 1000, 1060, DAY_END);
+    const r = reflowPlace(day, 'move', 1000, 1060, WORKING_END);
     expect(r.ok).toBe(true);
     expect(at(r.blocks, 'meeting')).toMatchObject({ start: 840, end: 900 });
   });
@@ -107,25 +111,25 @@ describe('reflowPlace — closing the vacated slot', () => {
       b('x', 540, 600), // adjacent — slides up
       b('far', 800, 860), // real gap — stays
     ];
-    const r = reflowPlace(day, 'move', 1000, 1040, DAY_END);
+    const r = reflowPlace(day, 'move', 1000, 1040, WORKING_END);
     expect(shape(r.blocks)).toEqual(['x:480-540', 'far:800-860', 'move:1000-1040']);
   });
 
   it('treats a gap within the snap tolerance as part of the run', () => {
     const day = [b('move', 480, 540), b('x', 540 + ADJACENCY_TOLERANCE, 600)];
-    const r = reflowPlace(day, 'move', 1000, 1060, DAY_END);
+    const r = reflowPlace(day, 'move', 1000, 1060, WORKING_END);
     expect(at(r.blocks, 'x').start).toBeLessThan(545);
   });
 
   it('does not slide a completed block up into the hole', () => {
     const day = [b('move', 480, 540), b('done', 540, 600, { completed: true })];
-    const r = reflowPlace(day, 'move', 900, 960, DAY_END);
+    const r = reflowPlace(day, 'move', 900, 960, WORKING_END);
     expect(at(r.blocks, 'done')).toMatchObject({ start: 540, end: 600 });
   });
 
   it('leaves the day alone when the block did not actually move', () => {
     const day = [b('a', 480, 540), b('x', 540, 600)];
-    const r = reflowPlace(day, 'a', 480, 540, DAY_END);
+    const r = reflowPlace(day, 'a', 480, 540, WORKING_END);
     expect(shape(r.blocks)).toEqual(['a:480-540', 'x:540-600']);
     expect(r.movedIds).toEqual([]);
   });
@@ -133,13 +137,13 @@ describe('reflowPlace — closing the vacated slot', () => {
   it('compacts behind a shrink', () => {
     const day = [b('a', 480, 600), b('x', 600, 660)];
     // Resize `a` from 120 to 60 minutes; the run closes up behind it.
-    const r = reflowPlace(day, 'a', 480, 540, DAY_END);
+    const r = reflowPlace(day, 'a', 480, 540, WORKING_END);
     expect(shape(r.blocks)).toEqual(['a:480-540', 'x:540-600']);
   });
 
   it('pushes down when a block is extended', () => {
     const day = [b('a', 480, 540), b('x', 540, 600)];
-    const r = reflowPlace(day, 'a', 480, 600, DAY_END);
+    const r = reflowPlace(day, 'a', 480, 600, WORKING_END);
     expect(shape(r.blocks)).toEqual(['a:480-600', 'x:600-660']);
   });
 });
@@ -147,7 +151,7 @@ describe('reflowPlace — closing the vacated slot', () => {
 describe('reflowPlace — immovable work', () => {
   it('refuses when a completed block holds the destination', () => {
     const day = [b('move', 900, 960), b('done', 600, 660, { completed: true })];
-    const r = reflowPlace(day, 'move', 600, 660, DAY_END);
+    const r = reflowPlace(day, 'move', 600, 660, WORKING_END);
     expect(r.ok).toBe(false);
     expect(r.message).toContain('done');
     expect(r.message).toContain('“done”');
@@ -156,7 +160,7 @@ describe('reflowPlace — immovable work', () => {
 
   it('refuses when a pinned block holds the destination, and names it', () => {
     const day = [b('move', 900, 960), b('Client call', 600, 660, { pinned: true })];
-    const r = reflowPlace(day, 'move', 620, 680, DAY_END);
+    const r = reflowPlace(day, 'move', 620, 680, WORKING_END);
     expect(r.ok).toBe(false);
     expect(r.message).toBe('Can’t make room there — “Client call” is pinned.');
   });
@@ -169,7 +173,7 @@ describe('reflowPlace — immovable work', () => {
     ];
     // Inserting at 600 pushes x down, but x cannot displace the pinned block —
     // so x lands after it and the move still succeeds.
-    const r = reflowPlace(day, 'move', 600, 660, DAY_END);
+    const r = reflowPlace(day, 'move', 600, 660, WORKING_END);
     expect(r.ok).toBe(true);
     expect(at(r.blocks, 'pinned')).toMatchObject({ start: 660, end: 720 });
     expect(at(r.blocks, 'x').start).toBeGreaterThanOrEqual(720);
@@ -179,7 +183,7 @@ describe('reflowPlace — immovable work', () => {
     // Pinning resists being *pushed*; it does not lock the block against an
     // explicit drag.
     const day = [b('p', 480, 540, { pinned: true })];
-    const r = reflowPlace(day, 'p', 900, 960, DAY_END);
+    const r = reflowPlace(day, 'p', 900, 960, WORKING_END);
     expect(r.ok).toBe(true);
     expect(at(r.blocks, 'p')).toMatchObject({ start: 900, end: 960 });
   });
@@ -187,16 +191,16 @@ describe('reflowPlace — immovable work', () => {
 
 describe('reflowPlace — spilling past the working day', () => {
   it('allows the spill and reports how far', () => {
-    const day = [b('move', 480, 540), b('x', DAY_END - 60, DAY_END)];
-    const r = reflowPlace(day, 'move', DAY_END - 60, DAY_END, DAY_END);
+    const day = [b('move', 480, 540), b('x', WORKING_END - 60, WORKING_END)];
+    const r = reflowPlace(day, 'move', WORKING_END - 60, WORKING_END, WORKING_END);
     expect(r.ok).toBe(true);
     expect(r.spillMinutes).toBe(60);
-    expect(at(r.blocks, 'x').end).toBe(DAY_END + 60);
+    expect(at(r.blocks, 'x').end).toBe(WORKING_END + 60);
   });
 
   it('reports no spill when everything still fits', () => {
     const day = [b('move', 480, 540), b('x', 600, 660)];
-    const r = reflowPlace(day, 'move', 600, 660, DAY_END);
+    const r = reflowPlace(day, 'move', 600, 660, WORKING_END);
     expect(r.spillMinutes).toBe(0);
   });
 });
@@ -204,13 +208,13 @@ describe('reflowPlace — spilling past the working day', () => {
 describe('reflowPlace — validation', () => {
   it('refuses a zero-length or inverted placement', () => {
     const day = [b('a', 480, 540)];
-    expect(reflowPlace(day, 'a', 500, 500, DAY_END).ok).toBe(false);
-    expect(reflowPlace(day, 'a', 540, 480, DAY_END).ok).toBe(false);
+    expect(reflowPlace(day, 'a', 500, 500, WORKING_END).ok).toBe(false);
+    expect(reflowPlace(day, 'a', 540, 480, WORKING_END).ok).toBe(false);
   });
 
   it('is a no-op for an unknown id', () => {
     const day = [b('a', 480, 540)];
-    const r = reflowPlace(day, 'nope', 600, 660, DAY_END);
+    const r = reflowPlace(day, 'nope', 600, 660, WORKING_END);
     expect(r.ok).toBe(false);
     expect(r.blocks).toBe(day);
   });
@@ -221,21 +225,21 @@ describe('reflowPlace — validation', () => {
 describe('reflowInsert — a block arriving from another day', () => {
   it('makes room without compacting anything', () => {
     const day = [b('x', 600, 660)];
-    const r = reflowInsert(day, b('in', 600, 690), DAY_END);
+    const r = reflowInsert(day, b('in', 600, 690), WORKING_END);
     expect(r.ok).toBe(true);
     expect(shape(r.blocks)).toEqual(['in:600-690', 'x:690-750']);
   });
 
   it('lands cleanly in a free slot', () => {
     const day = [b('x', 600, 660)];
-    const r = reflowInsert(day, b('in', 700, 760), DAY_END);
+    const r = reflowInsert(day, b('in', 700, 760), WORKING_END);
     expect(r.movedIds).toEqual([]);
     expect(shape(r.blocks)).toEqual(['x:600-660', 'in:700-760']);
   });
 
   it('refuses when an immovable holds the landing slot', () => {
     const day = [b('done', 600, 660, { completed: true })];
-    const r = reflowInsert(day, b('in', 610, 670), DAY_END);
+    const r = reflowInsert(day, b('in', 610, 670), WORKING_END);
     expect(r.ok).toBe(false);
     expect(r.blocks).toBe(day);
   });
@@ -244,19 +248,19 @@ describe('reflowInsert — a block arriving from another day', () => {
 describe('reflowRemove — the day a block left', () => {
   it('closes the hole for the run behind it', () => {
     const day = [b('gone', 480, 540), b('x', 540, 600), b('y', 600, 660)];
-    const r = reflowRemove(day, 'gone', DAY_END);
+    const r = reflowRemove(day, 'gone', WORKING_END);
     expect(shape(r.blocks)).toEqual(['x:480-540', 'y:540-600']);
   });
 
   it('leaves distant blocks where they were', () => {
     const day = [b('gone', 480, 540), b('meeting', 840, 900)];
-    const r = reflowRemove(day, 'gone', DAY_END);
+    const r = reflowRemove(day, 'gone', WORKING_END);
     expect(shape(r.blocks)).toEqual(['meeting:840-900']);
   });
 
   it('is a no-op for an unknown id', () => {
     const day = [b('a', 480, 540)];
-    expect(reflowRemove(day, 'nope', DAY_END).blocks).toBe(day);
+    expect(reflowRemove(day, 'nope', WORKING_END).blocks).toBe(day);
   });
 });
 
@@ -281,7 +285,7 @@ describe('reflow — invariants', () => {
       b('pin', 1000, 1040, { pinned: true }),
     ];
     for (let start = 460; start <= 1080; start += 5) {
-      const r = reflowPlace(day, 'c', start, start + 90, DAY_END);
+      const r = reflowPlace(day, 'c', start, start + 90, WORKING_END);
       if (!r.ok) continue;
       expect(overlapping(r.blocks)).toBeNull();
       expect(r.blocks).toHaveLength(day.length);
@@ -290,7 +294,7 @@ describe('reflow — invariants', () => {
 
   it('preserves every block and its duration', () => {
     const day = [b('a', 480, 540), b('bb', 540, 660), b('c', 700, 760)];
-    const r = reflowPlace(day, 'a', 700, 760, DAY_END);
+    const r = reflowPlace(day, 'a', 700, 760, WORKING_END);
     expect(r.blocks.map((x) => x.id).sort()).toEqual(['a', 'bb', 'c']);
     for (const original of day) {
       const now = at(r.blocks, original.id);
@@ -300,8 +304,79 @@ describe('reflow — invariants', () => {
 
   it('is idempotent — placing a block where it already is changes nothing', () => {
     const day = [b('a', 480, 540), b('bb', 540, 600)];
-    const once = reflowPlace(day, 'a', 600, 660, DAY_END);
-    const twice = reflowPlace(once.blocks, 'a', 600, 660, DAY_END);
+    const once = reflowPlace(day, 'a', 600, 660, WORKING_END);
+    const twice = reflowPlace(once.blocks, 'a', 600, 660, WORKING_END);
     expect(shape(twice.blocks)).toEqual(shape(once.blocks));
+  });
+});
+
+describe('the midnight ceiling', () => {
+  it('refuses a block placed past midnight outright', () => {
+    const day = [b('a', 480, 540)];
+    const r = reflowPlace(day, 'a', 1400, 1500, WORKING_END);
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/past midnight/i);
+    expect(shape(r.blocks)).toEqual(shape(day));
+  });
+
+  it('allows a block ending exactly at midnight', () => {
+    // 1440 IS midnight, and the day is over. Off-by-one here would cost a real slot.
+    const day = [b('a', 480, 540)];
+    const r = reflowPlace(day, 'a', DAY_END - 60, DAY_END, WORKING_END);
+    expect(r.ok).toBe(true);
+    expect(at(r.blocks, 'a').end).toBe(DAY_END);
+  });
+
+  it('refuses when the cascade would push the tail past midnight', () => {
+    // The reported repro, in miniature: a full evening, then something inserted above it.
+    // Before the ceiling the tail was pushed past 1440 and the grid drew a second
+    // afternoon underneath the first.
+    const day = [
+      b('one', 1260, 1320), // 21:00
+      b('two', 1320, 1380), // 22:00
+      b('three', 1380, 1440), // 23:00 — ends exactly at midnight
+    ];
+    const incoming = b('new', 1260, 1350); // 90 minutes at 21:00
+    const r = reflowInsert(day, incoming, WORKING_END);
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/past midnight/i);
+    // And it names the block that ran out of room. That is "two", not the last one:
+    // "one" is displaced to 21:30 and still fits, and "two" is the first that cannot.
+    expect(r.message).toMatch(/two/);
+    expect(shape(r.blocks)).toEqual(shape(day));
+  });
+
+  it('still allows a cascade that fits before midnight', () => {
+    const day = [b('one', 1260, 1320), b('two', 1320, 1380)];
+    const r = reflowInsert(day, b('new', 1260, 1320), WORKING_END);
+    expect(r.ok).toBe(true);
+    // Everything moved down by an hour and the last block ends at midnight exactly.
+    expect(at(r.blocks, 'two').end).toBe(DAY_END);
+  });
+
+  it('never produces a block ending past midnight from any accepted move', () => {
+    // The invariant, stated once: whatever comes back ok is inside the day.
+    const day = [
+      b('a', 1200, 1260),
+      b('bb', 1260, 1320),
+      b('c', 1320, 1380),
+      b('d', 1380, 1440),
+    ];
+    for (let start = 1100; start <= 1440; start += 20) {
+      const r = reflowPlace(day, 'a', start, start + 60, WORKING_END);
+      if (!r.ok) continue;
+      for (const block of r.blocks) {
+        expect(block.end).toBeLessThanOrEqual(DAY_END);
+        expect(block.start).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it('spill past working hours is still allowed — only midnight is a wall', () => {
+    // The distinction that matters: the app deliberately narrates working-hour spill.
+    const day = [b('a', WORKING_END - 60, WORKING_END)];
+    const r = reflowPlace(day, 'a', WORKING_END, WORKING_END + 60, WORKING_END);
+    expect(r.ok).toBe(true);
+    expect(r.spillMinutes).toBe(60);
   });
 });

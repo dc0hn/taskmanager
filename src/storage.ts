@@ -28,8 +28,11 @@ import type {
 } from './types';
 import { uid } from './utils/id';
 import { emptyProgress } from './progress';
+import { DAY_END } from './reflow';
 import { emptyAwards, emptyStreak } from './streaks';
 import { emptyShop, itemById, pruneBoostedDates, type ShopState } from './shop';
+import type { Commission } from './commissions';
+import { isSeasonKey, seasonRange, type SeasonRecord } from './seasons';
 import { toDateKey } from './utils/time';
 
 // ============================================================================
@@ -60,6 +63,8 @@ const DAY_STATS_KEY = 'dp:daystats:v1';
 const STREAK_KEY = 'dp:streak:v1';
 const AWARDS_KEY = 'dp:awards:v1';
 const SHOP_KEY = 'dp:shop:v1';
+const COMMISSIONS_KEY = 'dp:commissions:v1';
+const SEASON_PREFIX = 'dp:season:';
 const MARK_DEFS_KEY = 'dp:markdefs:v1';
 const DAY_MARKS_KEY = 'dp:daymarks:v1';
 
@@ -167,11 +172,16 @@ function normalizeTask(r: unknown): Task | null {
 function normalizeBlock(r: unknown): Block | null {
   if (!r || typeof r !== 'object') return null;
   const b = r as Record<string, unknown>;
+  // Bounded to the day, not merely ordered. `end > start` alone let an imported or
+  // hand-edited profile carry a block past midnight, which is the state the reflow
+  // ceiling now prevents from being created — this stops it being read back in.
   if (
     typeof b.title !== 'string' ||
     !isFiniteNum(b.start) ||
     !isFiniteNum(b.end) ||
-    b.end <= b.start
+    b.end <= b.start ||
+    b.start < 0 ||
+    b.end > DAY_END
   ) {
     return null;
   }
@@ -220,12 +230,50 @@ export function savePlan(plan: DayPlan): void {
     console.error('Almanac: refusing to save plan with invalid date', plan.date);
     return;
   }
+  const fresh = planDateCache != null && !planDateCache.includes(plan.date);
   write(PLAN_PREFIX + plan.date, plan);
+  // Only a NEW date changes the answer. Overwriting a plan that already exists leaves the
+  // set of dates identical, and re-scanning for it would undo the point of caching —
+  // savePlan runs on a debounce after every edit.
+  if (fresh) planDateCache = null;
 }
 
-/** Every date that has a stored plan, ascending. */
+/**
+ * Every date that has a stored plan, ascending.
+ *
+ * Cached, because this is an O(all keys) walk of the entire store and its result changes
+ * only when a plan is created. It sits behind the codex's ninety-day window and behind
+ * `authoritativeDates`, which recomputes whenever `plans` changes — so on a store with a
+ * few years of history it was being re-enumerated on something close to every keystroke.
+ *
+ * Invalidated by `savePlan` when the date is new, and by anything that rewrites the store
+ * wholesale. A stale cache here would mean a day's plan existing but not being counted as
+ * authoritative, which suppresses reconciliation rather than corrupting it — but it would
+ * still be wrong, so the invalidation points are deliberately few and explicit.
+ */
+let planDateCache: string[] | null = null;
+/**
+ * Which store the cache belongs to.
+ *
+ * Module-level caches and swapped globals do not mix: the test suites replace
+ * `globalThis.localStorage` between cases, and a cache surviving that swap would answer
+ * for the wrong store. Comparing the reference costs nothing and makes the invalidation
+ * automatic rather than something every caller has to remember.
+ */
+let cachedStore: unknown = null;
+
 export function listPlanDates(): string[] {
-  return listKeys(PLAN_PREFIX).filter(isDateKey);
+  const store = typeof localStorage === 'undefined' ? null : localStorage;
+  if (planDateCache == null || cachedStore !== store) {
+    planDateCache = listKeys(PLAN_PREFIX).filter(isDateKey);
+    cachedStore = store;
+  }
+  return planDateCache;
+}
+
+/** Drop the cache. For imports and restores, which replace arbitrary records. */
+export function invalidatePlanDates(): void {
+  planDateCache = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,16 +283,25 @@ export function listPlanDates(): string[] {
 export function loadSettings(): Settings {
   const parsed = read<Record<string, unknown>>(SETTINGS_KEY);
   if (!parsed) return DEFAULT_SETTINGS;
+  // Clamped into the day as well as validated. The working window sets the grid's
+  // visible range, which in turn sets the drag clamp — so an out-of-range `workingEnd`
+  // would draw a time axis past midnight and let a drag follow it there, which is the
+  // same failure the reflow ceiling exists to prevent, arriving by a different door.
+  const bound = (v: number) => Math.min(DAY_END, Math.max(0, Math.round(v)));
   const start = isFiniteNum(parsed.workingStart)
-    ? parsed.workingStart
+    ? bound(parsed.workingStart)
     : DEFAULT_SETTINGS.workingStart;
   const end = isFiniteNum(parsed.workingEnd)
-    ? parsed.workingEnd
+    ? bound(parsed.workingEnd)
     : DEFAULT_SETTINGS.workingEnd;
   // A window that is inverted or empty would make the scheduler return
   // everything as overflow and render a zero-height timeline.
   if (end <= start) return DEFAULT_SETTINGS;
-  return { workingStart: start, workingEnd: end };
+  return {
+    workingStart: start,
+    workingEnd: end,
+    useInsightScheduling: parsed.useInsightScheduling === true,
+  };
 }
 
 export function saveSettings(s: Settings): void {
@@ -866,6 +923,109 @@ export function saveShop(shop: ShopState): void {
   write(SHOP_KEY, shop);
 }
 
+
+// ---------------------------------------------------------------------------
+// Commissions
+// ---------------------------------------------------------------------------
+
+/**
+ * Validated hard, because a commission holds staked brass.
+ *
+ * A malformed record here would either strand a stake or invent a payout, so anything that
+ * is not fully well-formed is dropped rather than repaired — the one place in this file
+ * where salvaging a partial record would be worse than losing it.
+ */
+export function loadCommissions(): Commission[] {
+  const parsed = read<unknown[]>(COMMISSIONS_KEY);
+  if (!Array.isArray(parsed)) return [];
+  const out: Commission[] = [];
+  const seen = new Set<string>();
+  for (const raw of parsed) {
+    if (!raw || typeof raw !== 'object') continue;
+    const c = raw as Record<string, unknown>;
+    const id = str(c.id);
+    if (!id || seen.has(id)) continue;
+    if (!isDateKey(c.date)) continue;
+    const blockId = str(c.blockId);
+    if (!blockId) continue;
+    if (!isFiniteNum(c.stake) || c.stake <= 0) continue;
+    const outcome =
+      c.outcome === 'kept' || c.outcome === 'forfeited' ? c.outcome : 'open';
+    seen.add(id);
+    out.push({
+      id,
+      date: c.date,
+      blockId,
+      title: typeof c.title === 'string' ? c.title : 'An entry',
+      stake: Math.floor(c.stake),
+      placedOn: isDateKey(c.placedOn) ? c.placedOn : '',
+      outcome,
+      settledOn: isDateKey(c.settledOn) ? c.settledOn : '',
+    });
+  }
+  return out;
+}
+
+export function saveCommissions(commissions: Commission[]): void {
+  write(COMMISSIONS_KEY, commissions);
+}
+
+
+// ---------------------------------------------------------------------------
+// Seasons
+// ---------------------------------------------------------------------------
+
+function normalizeSeason(season: string, r: unknown): SeasonRecord | null {
+  if (!r || typeof r !== 'object') return null;
+  const d = r as Record<string, unknown>;
+  const num = (v: unknown) => (isFiniteNum(v) ? Math.max(0, Math.round(v)) : 0);
+  const range = seasonRange(season);
+  const marks: Record<string, number> = {};
+  if (d.marks && typeof d.marks === 'object') {
+    for (const [id, n] of Object.entries(d.marks as Record<string, unknown>)) {
+      if (isFiniteNum(n) && n > 0) marks[id] = Math.floor(n);
+    }
+  }
+  return {
+    season,
+    // The range is derived from the key rather than trusted, so a hand-edited record cannot
+    // claim a season covers dates it does not.
+    from: range.from,
+    to: range.to,
+    xpStart: num(d.xpStart),
+    xpEnd: num(d.xpEnd),
+    level: num(d.level),
+    rank: typeof d.rank === 'string' ? d.rank : '',
+    prestige: num(d.prestige),
+    daysKept: num(d.daysKept),
+    daysCleared: num(d.daysCleared),
+    bestRun: num(d.bestRun),
+    focusMinutes: num(d.focusMinutes),
+    doneMinutes: num(d.doneMinutes),
+    marks,
+    sealedOn: isDateKey(d.sealedOn) ? d.sealedOn : '',
+  };
+}
+
+export function loadAllSeasons(): Record<string, SeasonRecord> {
+  const out: Record<string, SeasonRecord> = {};
+  for (const key of listKeys(SEASON_PREFIX)) {
+    if (!isSeasonKey(key)) continue;
+    const parsed = read<unknown>(SEASON_PREFIX + key);
+    const record = normalizeSeason(key, parsed);
+    if (record) out[key] = record;
+  }
+  return out;
+}
+
+export function saveSeason(record: SeasonRecord): void {
+  if (!isSeasonKey(record.season)) {
+    console.error('Almanac: refusing to save season with invalid key', record.season);
+    return;
+  }
+  write(SEASON_PREFIX + record.season, record);
+}
+
 // ---------------------------------------------------------------------------
 // Export / import
 //
@@ -958,6 +1118,10 @@ export function importAll(json: string, replace: boolean): ImportResult {
   }
 
   try {
+    // An import rewrites arbitrary records, so the plan-date cache cannot survive it.
+    // Dropped before the writes rather than after, so a throw partway through still
+    // leaves the cache invalid rather than confidently wrong.
+    invalidatePlanDates();
     if (replace) {
       for (const key of listKeys('dp:').map((k) => 'dp:' + k)) {
         localStorage.removeItem(key);

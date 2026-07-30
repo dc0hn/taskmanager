@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { ArrowLeft, ArrowRight, Plus, RotateCcw, Scan } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Plus, RotateCcw, Scan, Undo2 } from 'lucide-react';
 import type { DayMarkDef, ViewMode } from '../types';
 import { fromDateKey, toDateKey } from '../utils/time';
 import { formatMonthLong, formatWeekRangeLong } from '../week';
@@ -19,6 +19,9 @@ interface Props {
   /** Shown only when there is something incomplete to reflow. */
   canReplan: boolean;
   onRebuildFromNow: () => void;
+  /** How many gestures deep the undo stack is. Zero disables the control. */
+  undoCount: number;
+  onUndo: () => void;
   /** Only supplied in month view — the importer reads a whole month at a time. */
   onImportMarks?: () => void;
   /** e.g. "4 travel · 2 gig", for the month currently shown. */
@@ -43,6 +46,8 @@ function Toolbar({
   onAdd,
   canReplan,
   onRebuildFromNow,
+  undoCount,
+  onUndo,
   onImportMarks,
   markSummary = '',
   dayMark = null,
@@ -124,6 +129,24 @@ function Toolbar({
             >
               <Scan size={13} strokeWidth={2} />
               Import marks
+            </button>
+          )}
+
+          {/*
+            Visible as well as bound to the shortcut. One drag can reflow six blocks, so
+            undo is the control most worth discovering — and a keyboard-only undo is one
+            nobody finds. The count is on the tooltip rather than the face: the number of
+            steps available is reassurance, not information you act on.
+          */}
+          {undoCount > 0 && (
+            <button
+              onClick={onUndo}
+              title={`Undo the last change (${undoCount} available) \u2014 \u2318Z`}
+              aria-label="Undo the last change"
+              className="btn-quiet inline-flex items-center gap-2 text-body-sm px-3 h-8"
+            >
+              <Undo2 size={13} strokeWidth={2} />
+              Undo
             </button>
           )}
 

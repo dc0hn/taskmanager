@@ -5,7 +5,7 @@ import type { Block, CategoryDef, DayPlan } from '../types';
 import { categoryColors, resolveCategory } from '../utils/color';
 import { format12h, formatHourLabel, toDateKey } from '../utils/time';
 import { DUR, EASE_OUT, SPRING_SETTLE } from '../utils/motion';
-import { reflowInsert, reflowPlace } from '../reflow';
+import { DAY_END, reflowInsert, reflowPlace } from '../reflow';
 import { fromDateKey } from '../utils/time';
 
 // ============================================================================
@@ -47,6 +47,13 @@ export interface TimeGridProps {
   onRefuse: (message: string) => void;
   /** Day view gets richer blocks; week view compresses them. */
   density: 'comfortable' | 'compact';
+  /**
+   * The keyboard-selected block, if any. Drawn with a ring so the selection is visible
+   * rather than merely tracked — an invisible cursor is worse than none, because Space
+   * then acts on something the user cannot point to.
+   */
+  selectedId?: string | null;
+  onSelect?: (id: string | null) => void;
 }
 
 interface DragState {
@@ -114,6 +121,8 @@ function TimeGrid({
   onTogglePin,
   onRefuse,
   density,
+  selectedId = null,
+  onSelect,
 }: TimeGridProps) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -229,17 +238,24 @@ function TimeGrid({
       let nextStart: number;
       let nextEnd: number;
 
+      // Clamped against midnight as well as the visible window. The window is derived
+      // from block ends, so it used to be the only bound — and one over-midnight block
+      // raised it, letting the next drag reach further still. Stating the ceiling here
+      // makes it local rather than something inferred from what happens to be on screen.
+      const floor = Math.max(0, visibleStart);
+      const ceiling = Math.min(visibleEnd, DAY_END);
+
       if (d.mode === 'move') {
         const len = d.origEnd - d.origStart;
-        const s = clamp(snap(d.origStart + dyMin), visibleStart, visibleEnd - len);
+        const s = clamp(snap(d.origStart + dyMin), floor, ceiling - len);
         nextStart = s;
         nextEnd = s + len;
       } else if (d.mode === 'resize-top') {
-        const s = clamp(snap(d.origStart + dyMin), visibleStart, d.origEnd - MIN_BLOCK);
+        const s = clamp(snap(d.origStart + dyMin), floor, d.origEnd - MIN_BLOCK);
         nextStart = s;
         nextEnd = d.origEnd;
       } else {
-        const e2 = clamp(snap(d.origEnd + dyMin), d.origStart + MIN_BLOCK, visibleEnd);
+        const e2 = clamp(snap(d.origEnd + dyMin), d.origStart + MIN_BLOCK, ceiling);
         nextStart = d.origStart;
         nextEnd = e2;
       }
@@ -431,7 +447,13 @@ function TimeGrid({
                       refused={dragging && preview?.ok === false}
                       density={density}
                       categories={categories}
-                      onPointerDown={(e, mode) => startDrag(e, date, b, mode)}
+                      selected={b.id === selectedId}
+                      onPointerDown={(e, mode) => {
+                        // Clicking a block also selects it, so the keyboard and the mouse
+                        // agree about what "the current block" is.
+                        onSelect?.(b.id);
+                        startDrag(e, date, b, mode);
+                      }}
                       onEdit={() => onEditBlock(date, b.id)}
                       onToggle={() => onToggleComplete(date, b.id)}
                       onTogglePin={() => onTogglePin(date, b.id)}
@@ -563,6 +585,7 @@ interface BlockCardProps {
   dragging: boolean;
   /** True when the current drop target is blocked by pinned or completed work. */
   refused: boolean;
+  selected: boolean;
   density: 'comfortable' | 'compact';
   categories: CategoryDef[];
   onPointerDown: (e: React.PointerEvent, mode: DragState['mode']) => void;
@@ -619,6 +642,7 @@ function BlockCard({
   height,
   dragging,
   refused,
+  selected,
   density,
   categories,
   onPointerDown,
@@ -747,7 +771,16 @@ function BlockCard({
           borderRight: `1px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
           borderBottom: `1px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
           borderLeft: `2px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.14)' : c.accent}`,
-          boxShadow: dragging ? '0 18px 40px -14px rgba(0,0,0,0.85)' : undefined,
+          // The selection ring is an inset shadow rather than an outline, so it draws
+          // INSIDE the block's bounds — an outline on a 15-minute block at 1.35px per
+          // minute overlaps its neighbours and reads as a rendering fault. Drag shadow and
+          // ring coexist, because you can drag the selected block.
+          boxShadow: [
+            dragging ? '0 18px 40px -14px rgba(0,0,0,0.85)' : '',
+            selected ? 'inset 0 0 0 2px var(--signal)' : '',
+          ]
+            .filter(Boolean)
+            .join(', ') || undefined,
         }}
       >
         {/* resize handles — only on real blocks, and only when tall enough */}

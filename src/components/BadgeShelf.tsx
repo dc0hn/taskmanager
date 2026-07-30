@@ -292,18 +292,21 @@ function BadgeTile({ status }: { status: BadgeStatus }) {
  * reasoning as levels crossing in one tick.
  */
 export const BadgeUnlockToast = memo(function BadgeUnlockToast({
-  queue,
-  onDone,
+  def,
+  remaining,
 }: {
-  queue: BadgeStatus['def'][];
-  onDone: () => void;
+  def: BadgeStatus['def'] | null;
+  /** How many reward moments of any kind are still waiting behind this one. */
+  remaining: number;
 }) {
   const reduced = useReducedMotion();
-  const current = queue[0] ?? null;
+  // The queue owns removal now; this only renders what it is given. Two removal paths —
+  // a timer and this card's own exit callback — used to drop moments in pairs.
+  const current = def;
 
   return (
     <div className="fixed left-6 bottom-6 z-[62] pointer-events-none">
-      <AnimatePresence onExitComplete={onDone}>
+      <AnimatePresence>
         {current && (
           <motion.div
             key={current.id}
@@ -332,7 +335,7 @@ export const BadgeUnlockToast = memo(function BadgeUnlockToast({
                 style={{ fontSize: 9.5, letterSpacing: '0.14em', color: 'var(--signal)' }}
               >
                 BADGE EARNED
-                {queue.length > 1 && ` · ${queue.length - 1} MORE`}
+                {remaining > 0 && ` · ${remaining} MORE`}
               </div>
               <div
                 className="font-display"

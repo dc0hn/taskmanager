@@ -16,6 +16,25 @@ import CategoriesView from './components/CategoriesView';
 import Toast from './components/Toast';
 import BackupModal from './components/BackupModal';
 import { snapshotIfDue } from './snapshot';
+import { momentOf, useRewardQueue } from './rewards';
+import { chainPayout, chainStatuses } from './chains';
+import {
+  currentSeason,
+  resolveElapsedSeasons,
+  seasonName,
+  seasonProgress,
+  type SeasonRecord,
+} from './seasons';
+import YearPage from './components/YearPage';
+import {
+  commissionFor,
+  payoutFor,
+  placeCommission,
+  pruneCommissions,
+  refusalMessage,
+  settleCommissions,
+  type Commission,
+} from './commissions';
 import type {
   Block,
   CarryoverItem,
@@ -66,6 +85,10 @@ import {
   saveAwards,
   saveDayStats,
   saveShop,
+  saveCommissions,
+  loadCommissions,
+  loadAllSeasons,
+  saveSeason,
   saveProgress,
   saveStreak,
   saveHabits,
@@ -82,7 +105,7 @@ import {
   monthsWithMarks,
   setMark,
 } from './daymarks';
-import { buildSchedule, rulesFor } from './scheduler';
+import { buildSchedule, rulesFor, type CategoryRules } from './scheduler';
 import StandingView from './components/StandingView';
 import { BadgeUnlockToast } from './components/BadgeShelf';
 import { QuestDoneToast } from './components/QuestBoard';
@@ -104,6 +127,7 @@ import {
   buildInsightContext,
   insightById,
   insightIdFromKey,
+  strongestWindows,
   insightStatuses,
   isRead,
   readKey,
@@ -139,6 +163,7 @@ import {
   reckonDay,
   xpForBlock,
   reconcileDays,
+  weekdayMedians,
   standingFor,
   isScored,
   resetProgress,
@@ -246,6 +271,14 @@ function minutesSinceMidnightOf(dayKey: string): number {
 }
 
 const AXIS_W = 62; // must match TimeGrid's gutter so the week strip lines up
+/**
+ * How far back the codex and the insight-driven scheduler look.
+ *
+ * Module scope rather than component body: two separate places load this window, one of
+ * them from a callback declared before the other, and a component-level const cannot be
+ * referenced by both.
+ */
+const INSIGHT_WINDOW_DAYS = 90;
 const SAVE_DEBOUNCE = 250;
 
 export default function App() {
@@ -277,6 +310,9 @@ export default function App() {
   const [streak, setStreak] = useState<StreakState>(loadStreak);
   const [awards, setAwards] = useState<AwardLedger>(loadAwards);
   const [shop, setShop] = useState<ShopState>(loadShop);
+  const [commissions, setCommissions] = useState<Commission[]>(loadCommissions);
+  const [seasons, setSeasons] = useState<Record<string, SeasonRecord>>(loadAllSeasons);
+  const [yearPageOpen, setYearPageOpen] = useState(false);
 
   // -------------------------------------------------------------------------
   // Latest-value mirrors
@@ -315,6 +351,34 @@ export default function App() {
     awardsRef.current = awards;
     shopRef.current = shop;
   });
+
+  /**
+   * The rules a build runs under, including what the history says when the setting is on.
+   *
+   * Loaded here rather than memoised, and on purpose. The codex's ninety-day window is
+   * otherwise only in memory while Standing is open, so a memo would have made the
+   * preference silently inert on the calendar — where the build button actually lives.
+   * Reading it costs about four milliseconds against three years of stored plans
+   * (measured in perf.test.ts), which is nothing once per press of a button, and it means
+   * the setting does what it says wherever you are.
+   */
+  const schedulerRulesNow = useCallback((): CategoryRules => {
+    const base = rulesFor(categories);
+    if (!settings.useInsightScheduling) return base;
+    if (!progressRef.current.startedOn) return base;
+
+    const dates = Array.from({ length: INSIGHT_WINDOW_DAYS }, (_, i) =>
+      addDays(todayKey, i - (INSIGHT_WINDOW_DAYS - 1))
+    );
+    const stored = new Set(listPlanDates());
+    const wanted = dates.filter(
+      (d) => stored.has(d) && isScored(d, progressRef.current.startedOn)
+    );
+    const windows = strongestWindows(
+      buildInsightContext(loadPlans(wanted), wanted, statsRef.current, categories)
+    );
+    return { ...base, preferredWindow: (id: string) => windows[id] ?? null };
+  }, [categories, settings.useInsightScheduling, todayKey]);
 
   /**
    * Cross midnight without being touched.
@@ -361,7 +425,11 @@ export default function App() {
     };
 
     schedule();
+    // Gated on becoming visible. `visibilitychange` fires on hide as well as show, so
+    // tabbing away used to resample and rebuild the timeout for no reason — harmless, but
+    // it doubled the work and made the timer's lifecycle harder to reason about.
     const onWake = () => {
+      if (document.visibilityState !== 'visible') return;
       sync();
       if (timer != null) window.clearTimeout(timer);
       schedule();
@@ -402,6 +470,30 @@ export default function App() {
   const [hoursOpen, setHoursOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [marksOpen, setMarksOpen] = useState(false);
+
+  /**
+   * A counter per modal, bumped each time one is OPENED.
+   *
+   * Used as a `key`, which makes opening a modal remount it — so its fields start from the
+   * current props instead of being reset by an effect afterwards. That is what
+   * `react-hooks/set-state-in-effect` was pointing at in all three of these, and the rule
+   * was right: resetting state in an effect means the stale values render for one frame
+   * first.
+   *
+   * Bumped on open rather than derived from the open flag, deliberately. Keying on the flag
+   * itself would remount on CLOSE too, and each of these animates its own exit — a
+   * component that remounts as it closes has nothing left to animate out.
+   */
+  const [modalEpoch, setModalEpoch] = useState(0);
+  const bumpModal = useCallback(() => setModalEpoch((n) => n + 1), []);
+
+  /**
+   * Does anything own the screen?
+   *
+   * The gate on every bare-key shortcut. A global keydown handler that fires while a modal
+   * is up is the classic way to make "n" create a block behind a dialog you were reading.
+   */
+  const anyModalOpen = hoursOpen || backupOpen || marksOpen || editing != null;
   const [buildPulse, setBuildPulse] = useState(0);
 
   // Reward presentation. Three queues rather than one flag, because a single
@@ -415,19 +507,32 @@ export default function App() {
    * crossings stomped the earlier ones, so a jump from level 0 to 6 announced whichever
    * toast happened to be mounted rather than where you ended up.
    */
-  const [levelQueue, setLevelQueue] = useState<Standing[]>([]);
+  const rewards = useRewardQueue();
+  // Destructured because the queue object's identity changes as moments play, while these
+  // two are stable for the component's life — so effects can depend on them honestly
+  // instead of suppressing the dependency warning.
+  const { push: pushReward, clear: clearRewards } = rewards;
   const [takeover, setTakeover] = useState<{ standing: Standing; prestige: boolean } | null>(null);
   const [sfxOn, setSfxOn] = useState(false);
-  const [runKept, setRunKept] = useState<{ run: number; seed: number } | null>(null);
   const [runTakeover, setRunTakeover] = useState<number | null>(null);
-  const [questQueue, setQuestQueue] = useState<{ name: string; xp: number }[]>([]);
-  const [codexQueue, setCodexQueue] = useState<{ name: string; glyph: string; xp: number }[]>([]);
-  const [badgeQueue, setBadgeQueue] = useState<BadgeDef[]>([]);
   /** Set on the day a comeback is paid, so the matching badge can see it. */
   const comebackTodayRef = useRef(false);
 
   const rules = useMemo(() => rulesFor(categories), [categories]);
+
   const weekKey = useMemo(() => toWeekKey(date), [date]);
+
+  /**
+   * The trailing baseline behind each weekday in the week strip.
+   *
+   * Derived from stored day stats, which are already in memory — no new record and no new
+   * mechanic, which is why this is the cheapest thing in the app that answers a question
+   * the progression layer otherwise cannot.
+   */
+  const weekMedians = useMemo(
+    () => weekdayMedians(dayStats, weekDates(weekKey)),
+    [dayStats, weekKey]
+  );
 
   // Rewards clear themselves. Keyed on the award so a second completion inside the
   // window restarts the clock rather than inheriting the first one's remaining time.
@@ -437,27 +542,6 @@ export default function App() {
     return () => clearTimeout(id);
   }, [xpFloat]);
 
-  useEffect(() => {
-    if (levelQueue.length === 0) return;
-    // Shorter than the badge queue: these are frequent and each says one word.
-    const id = setTimeout(() => setLevelQueue((q) => q.slice(1)), 2200);
-    return () => clearTimeout(id);
-  }, [levelQueue]);
-
-  useEffect(() => {
-    if (!runKept) return;
-    const id = setTimeout(() => setRunKept(null), 2600);
-    return () => clearTimeout(id);
-  }, [runKept]);
-
-  // Badges show one at a time. Dropping the head after a beat lets the exit animation
-  // hand over to the next, so a day that trips four of them plays four moments rather
-  // than one card flickering between names.
-  useEffect(() => {
-    if (badgeQueue.length === 0) return;
-    const id = setTimeout(() => setBadgeQueue((q) => q.slice(1)), 2800);
-    return () => clearTimeout(id);
-  }, [badgeQueue]);
 
   // The takeover is dismissed by clicking, but any key should also clear it — it
   // covers the screen, so every plausible "get out of my way" gesture must work.
@@ -575,18 +659,81 @@ export default function App() {
   useEffect(() => saveDayStats(dayStats), [dayStats]);
   useEffect(() => saveStreak(streak), [streak]);
   useEffect(() => saveShop(shop), [shop]);
+  useEffect(() => saveCommissions(commissions), [commissions]);
   useEffect(() => saveWeek(week), [week]);
 
+  // -------------------------------------------------------------------------
+  // Undo
+  //
+  // The gap this closes: one drag can reflow six blocks, and `describeReflow` only ever
+  // narrated it — "Moved 4 entries to make room" with no way back. For a calendar whose
+  // core gesture cascades, that is the most consequential thing missing.
+  //
+  // A TRANSACTION IS A GESTURE, not a mutation. Moving a block between days calls
+  // `mutateDay` twice, and two undo entries for one drag would mean pressing the shortcut
+  // twice to reverse one action. So writes are collected into a pending transaction and
+  // banked at the end of the microtask, which is exactly one synchronous gesture.
+  //
+  // THE FIRST SNAPSHOT OF A DAY WINS. If a gesture touches the same day twice, the
+  // earliest capture is the true "before"; a later one would already contain half the
+  // change being undone.
+  //
+  // `null` records a day that did not exist, so undoing its creation removes it rather
+  // than leaving an empty plan behind.
+  // -------------------------------------------------------------------------
+  const UNDO_DEPTH = 25;
+  type UndoTx = { label: string; days: Record<string, DayPlan | null> };
+  const undoStack = useRef<UndoTx[]>([]);
+  const pendingTx = useRef<UndoTx | null>(null);
+  const [undoCount, setUndoCount] = useState(0);
+
+  const recordUndo = useCallback((day: string, label: string) => {
+    if (pendingTx.current == null) {
+      pendingTx.current = { label, days: {} };
+      queueMicrotask(() => {
+        const tx = pendingTx.current;
+        pendingTx.current = null;
+        if (!tx || Object.keys(tx.days).length === 0) return;
+        undoStack.current = [...undoStack.current, tx].slice(-UNDO_DEPTH);
+        setUndoCount(undoStack.current.length);
+      });
+    }
+    const tx = pendingTx.current;
+    if (!(day in tx.days)) tx.days[day] = plansRef.current[day] ?? null;
+  }, []);
+
   const mutateDay = useCallback(
-    (day: string, fn: (plan: DayPlan) => DayPlan) => {
+    (day: string, fn: (plan: DayPlan) => DayPlan, label = 'that change') => {
+      recordUndo(day, label);
       setPlans((prev) => {
         const current = prev[day] ?? { date: day, tasks: [], blocks: [] };
         dirty.current.add(day);
         return { ...prev, [day]: fn(current) };
       });
     },
-    []
+    [recordUndo]
   );
+
+  const undo = useCallback(() => {
+    const tx = undoStack.current[undoStack.current.length - 1];
+    if (!tx) {
+      setToast('Nothing to undo.');
+      return;
+    }
+    undoStack.current = undoStack.current.slice(0, -1);
+    setUndoCount(undoStack.current.length);
+
+    setPlans((prev) => {
+      const next = { ...prev };
+      for (const [day, before] of Object.entries(tx.days)) {
+        dirty.current.add(day);
+        if (before == null) next[day] = { date: day, tasks: [], blocks: [] };
+        else next[day] = before;
+      }
+      return next;
+    });
+    setToast(`Undid ${tx.label}.`);
+  }, []);
 
   // -------------------------------------------------------------------------
   // Lazy week rollover
@@ -798,7 +945,7 @@ export default function App() {
     } else {
       // Only the level actually arrived at, not every step to it: a burst of six
       // toasts for one completion is noise, and the last one is the news.
-      setLevelQueue((q) => [...q, celebrate]);
+      pushReward({ kind: 'level', standing: celebrate });
       sfxLevel();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1025,7 +1172,7 @@ export default function App() {
       totalXp: p.totalXp + xp,
       brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
     }));
-    setBadgeQueue((q) => [...q, ...defs]);
+    pushReward(...defs.map((def) => ({ kind: 'badge' as const, def })));
     sfxLevel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayStats, streak, dayMarks, todayKey, categories]);
@@ -1047,10 +1194,10 @@ export default function App() {
     keptTodayRef.current = kept;
     // First observation only establishes the baseline; it is not an event.
     if (was === null || was === kept || !kept) return;
-    setRunKept({ run: streakRef.current.current + 1, seed: Date.now() });
+    pushReward({ kind: 'runKept', run: streakRef.current.current + 1, seed: Date.now() });
     sfxDayCleared();
      
-  }, [dayStats, dayMarks, todayKey]);
+  }, [pushReward, dayStats, dayMarks, todayKey]);
 
   // -------------------------------------------------------------------------
   // Derived values
@@ -1256,16 +1403,21 @@ export default function App() {
   const weekly = useMemo(() => weeklyChallenge(questContext), [questContext]);
 
   /**
-   * A wide trailing window for the codex.
+   * A wide trailing window for the codex, in two parts.
    *
    * Loaded from storage rather than taken from `plans`, which only ever holds what the
-   * calendar is showing — a requirement of "twenty timed completions" that moved
-   * whenever you changed view would be unusable. Only computed while Standing is open,
-   * because it is ninety reads.
+   * calendar is showing — a requirement of "twenty timed completions" that moved whenever
+   * you changed view would be unusable. Only loaded while Standing is open, because it is
+   * ninety reads.
+   *
+   * SPLIT deliberately. This was one memo, and its dependency list included `dayStats` —
+   * which the streak, routine and bonus effects all write. So completing a block while
+   * Standing was open re-ran the whole thing: a full key enumeration plus ninety
+   * `getItem` and `JSON.parse` pairs, to answer a question only the aggregation needed.
+   * The load now keys on the window alone, and the aggregation over it is cheap.
    */
-  const INSIGHT_WINDOW_DAYS = 90;
-  const insightContext = useMemo(() => {
-    if (nav !== 'standing') return buildInsightContext({}, [], dayStats, categories);
+  const insightWindow = useMemo(() => {
+    if (nav !== 'standing') return { plans: {}, dates: [] as string[] };
     const dates = Array.from({ length: INSIGHT_WINDOW_DAYS }, (_, i) =>
       addDays(todayKey, i - (INSIGHT_WINDOW_DAYS - 1))
     );
@@ -1273,9 +1425,14 @@ export default function App() {
     // Only the scored era. An insight drawn from days before you started would pay XP
     // for history the rest of the system deliberately ignores.
     const wanted = dates.filter((d) => stored.has(d) && isScored(d, progress.startedOn));
-    return buildInsightContext(loadPlans(wanted), wanted, dayStats, categories);
-     
-  }, [nav, todayKey, dayStats, categories, progress.startedOn]);
+    return { plans: loadPlans(wanted), dates: wanted };
+  }, [nav, todayKey, progress.startedOn]);
+
+  const insightContext = useMemo(
+    () =>
+      buildInsightContext(insightWindow.plans, insightWindow.dates, dayStats, categories),
+    [insightWindow, dayStats, categories]
+  );
 
   const codex = useMemo(
     () => insightStatuses(awards, insightContext),
@@ -1283,6 +1440,166 @@ export default function App() {
   );
 
   const standing = useMemo(() => standingFor(progress.totalXp), [progress.totalXp]);
+
+  /**
+   * Seal every season that has finished.
+   *
+   * Same lazy, idempotent shape as the week and month rollovers, and keyed on `todayKey` so
+   * a session left open across a quarter boundary still seals on time. A seal is a reading,
+   * not a reset: it writes down what was true and touches nothing else, because a planner
+   * that confiscates progress at a date boundary has misunderstood what the progress was
+   * for.
+   */
+  useEffect(() => {
+    if (!progressRef.current.startedOn) return;
+    const result = resolveElapsedSeasons(
+      todayKey,
+      seasons,
+      {
+        stats: statsRef.current,
+        marks: dayMarks,
+        totalXp: progressRef.current.totalXp,
+        threshold: STREAK_THRESHOLD,
+      },
+      progressRef.current.startedOn
+    );
+    if (!result.changed) return;
+    for (const record of result.sealed) saveSeason(record);
+    setSeasons(loadAllSeasons());
+    const last = result.sealed[result.sealed.length - 1];
+    setToast(`${seasonName(last.season)} is sealed. ${last.daysKept} days kept.`);
+     
+  }, [todayKey, seasons, dayMarks]);
+
+  /** The season in progress, reckoned live so it reads beside the sealed ones. */
+  const liveSeason = useMemo(
+    () =>
+      currentSeason(todayKey, seasons, {
+        stats: dayStats,
+        marks: dayMarks,
+        totalXp: progress.totalXp,
+        threshold: STREAK_THRESHOLD,
+      }),
+    [todayKey, seasons, dayStats, dayMarks, progress.totalXp]
+  );
+
+  /**
+   * Settle commissions whose day has passed.
+   *
+   * Same lazy, idempotent shape as the streak walk: `outcome` moving off `open` is the
+   * guard, so this is safe on every pass and correct after the app has been shut for a
+   * fortnight. Today is never settled — the day is still in play, and forfeiting at
+   * breakfast would take a stake for work the afternoon was going to do.
+   *
+   * Reads plans from storage rather than from `plans`, because a commission's day may not be
+   * anywhere near the calendar view when it comes due.
+   */
+  useEffect(() => {
+    const open = commissions.filter((c) => c.outcome === 'open' && c.date < todayKey);
+    if (open.length === 0) return;
+
+    const wanted = [...new Set(open.map((c) => c.date))];
+    const result = settleCommissions(commissions, loadPlans(wanted), todayKey);
+    if (!result.changed) return;
+
+    setCommissions(pruneCommissions(result.commissions, todayKey));
+    if (result.brass > 0) {
+      setProgress((p) => ({ ...p, brass: p.brass + result.brass }));
+    }
+
+    const kept = result.settled.filter((c) => c.outcome === 'kept');
+    const lost = result.settled.filter((c) => c.outcome === 'forfeited');
+    if (kept.length > 0 && lost.length === 0) {
+      setToast(
+        `${kept.length === 1 ? 'Commission kept' : `${kept.length} commissions kept`} — ${result.brass.toLocaleString()} brass back.`
+      );
+    } else if (lost.length > 0 && kept.length === 0) {
+      const staked = lost.reduce((sum, c) => sum + c.stake, 0);
+      setToast(
+        `${lost.length === 1 ? 'A commission lapsed' : `${lost.length} commissions lapsed`} — ${staked.toLocaleString()} brass forfeited.`
+      );
+    } else if (kept.length > 0) {
+      setToast(
+        `${kept.length} kept, ${lost.length} lapsed. ${result.brass.toLocaleString()} brass back.`
+      );
+    }
+     
+  }, [commissions, todayKey]);
+
+  /**
+   * Place a commission.
+   *
+   * The stake leaves the balance here, at placement, which is what makes it a stake rather
+   * than a wager settled later. `brassSpent` moves with it so lifetime earnings stay
+   * derivable — and a forfeit is then simply a spend that bought nothing, which the honest
+   * negative balance can already express.
+   */
+  const handleCommit = useCallback(
+    (date: string, blockId: string, stake: number) => {
+      const result = placeCommission({
+        existing: commissions,
+        plan: plansRef.current[date],
+        date,
+        blockId,
+        stake,
+        brass: progressRef.current.brass,
+        today: todayKey,
+        id: uid(),
+      });
+      if (!result.ok || !result.commission) {
+        setToast(
+          refusalMessage(result.reason ?? 'missing', stake, progressRef.current.brass)
+        );
+        return;
+      }
+      setCommissions((cs) => [...cs, result.commission!]);
+      setProgress((p) => ({
+        ...p,
+        brass: p.brass - stake,
+        brassSpent: p.brassSpent + stake,
+      }));
+      setToast(
+        `${stake.toLocaleString()} brass staked on “${result.commission.title}”. Finish it for ${payoutFor(stake).toLocaleString()}.`
+      );
+    },
+    [commissions, todayKey]
+  );
+
+  /**
+   * Chain progress, and the steps it owes.
+   *
+   * Built from lifetime counters rather than the week, which is the whole reason chains can
+   * span a fortnight. Cheap enough to recompute freely — every input is already in memory.
+   */
+  const chainContext = useMemo(
+    () => ({ progress, streak, stats: dayStats, awards, today: todayKey }),
+    [progress, streak, dayStats, awards, todayKey]
+  );
+
+  const chains = useMemo(() => chainStatuses(awards, chainContext), [awards, chainContext]);
+
+  useEffect(() => {
+    if (!progressRef.current.startedOn) return;
+    const due = chainPayout(awardsRef.current, chainContext);
+    if (due.length === 0) return;
+    const paid = grantOnce(due);
+    if (paid.length === 0) return;
+    const xp = payoutXp(paid);
+    setProgress((p) => ({
+      ...p,
+      totalXp: p.totalXp + xp,
+      brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
+    }));
+    pushReward(
+      ...paid.map((a: AwardPayout) => ({
+        kind: 'quest' as const,
+        name: a.label ?? 'Chain step',
+        xp: a.xp,
+      }))
+    );
+    sfxMilestone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainContext]);
 
   /**
    * Unseal codex cards whose data requirement is met.
@@ -1306,23 +1623,17 @@ export default function App() {
       brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
       disciplines: mergeDisciplines(p.disciplines ?? {}, { insight: xp }),
     }));
-    setCodexQueue((q) => [
-      ...q,
+    pushReward(
       ...paid.flatMap((p) => {
         const rule = insightById(insightIdFromKey(p.key));
-        return rule ? [{ name: rule.name, glyph: rule.glyph, xp: rule.xpUnlock }] : [];
-      }),
-    ]);
+        return rule
+          ? [{ kind: 'codex' as const, name: rule.name, glyph: rule.glyph, xp: rule.xpUnlock }]
+          : [];
+      })
+    );
     sfxMilestone();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nav, insightContext]);
-
-  useEffect(() => {
-    if (codexQueue.length === 0) return;
-    const id = setTimeout(() => setCodexQueue((q) => q.slice(1)), 3200);
-    return () => clearTimeout(id);
-  }, [codexQueue]);
-
 
   const shopOffers = useMemo(
     () => offersFor(shop, progress, weekKey),
@@ -1377,19 +1688,16 @@ export default function App() {
     setStreak(resetStreak(todayKey));
     setAwards(emptyAwards());
     setShop(emptyShop());
-    setBadgeQueue([]);
-    setCodexQueue([]);
-    setQuestQueue([]);
-    setLevelQueue([]);
+    clearRewards();
     setTakeover(null);
     setRunTakeover(null);
-    setRunKept(null);
+
     keptTodayRef.current = null;
     reviewSeen.current = '';
     comebackTodayRef.current = false;
     setToast('Standing reset. Level 0, nothing earned — counting from today.');
      
-  }, [todayKey]);
+  }, [clearRewards, todayKey]);
 
   const handleEquip = useCallback((itemId: string) => {
     setShop((s) => equipItem(s, itemId));
@@ -1466,23 +1774,16 @@ export default function App() {
     // One entry per finished thing, so a day that closes three plays three moments.
     // Built from the payouts, which already carry the name and the XP that was paid —
     // no second lookup by name, which was the one place a rename could mis-report.
-    setQuestQueue((q) => [
-      ...q,
+    pushReward(
       ...paid.map((p) => ({
+        kind: 'quest' as const,
         name: p.label ?? 'Quest',
         xp: p.xp,
-      })),
-    ]);
+      }))
+    );
     sfxMilestone();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quests, daily, weekly, weekKey]);
-
-  useEffect(() => {
-    if (questQueue.length === 0) return;
-    const id = setTimeout(() => setQuestQueue((q) => q.slice(1)), 2800);
-    return () => clearTimeout(id);
-  }, [questQueue]);
-
 
   const badges = useMemo(
     () =>
@@ -1513,7 +1814,7 @@ export default function App() {
   // -------------------------------------------------------------------------
   const handleAddTasks = useCallback(
     (newTasks: Task[]) => {
-      mutateDay(date, (p) => ({ ...p, tasks: [...p.tasks, ...newTasks] }));
+      mutateDay(date, (p) => ({ ...p, tasks: [...p.tasks, ...newTasks] }), 'adding those tasks');
     },
     [date, mutateDay]
   );
@@ -1523,14 +1824,14 @@ export default function App() {
       mutateDay(date, (p) => ({
         ...p,
         tasks: p.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-      }));
+      }), 'that task edit');
     },
     [date, mutateDay]
   );
 
   const handleRemoveTask = useCallback(
     (id: string) => {
-      mutateDay(date, (p) => ({ ...p, tasks: p.tasks.filter((t) => t.id !== id) }));
+      mutateDay(date, (p) => ({ ...p, tasks: p.tasks.filter((t) => t.id !== id) }), 'removing that task');
     },
     [date, mutateDay]
   );
@@ -1587,7 +1888,7 @@ export default function App() {
       effectiveStart(date, settings),
       settings.workingEnd,
       preserved,
-      rules
+      schedulerRulesNow()
     );
 
     const completed = new Set(plan.blocks.filter((b) => b.completed).map((b) => b.id));
@@ -1602,12 +1903,12 @@ export default function App() {
       return completed.has(b.id) ? { ...withPriority, completed: true } : withPriority;
     });
 
-    mutateDay(date, (p) => ({ ...p, blocks, tasks: [] }));
+    mutateDay(date, (p) => ({ ...p, blocks, tasks: [] }), 'building the day');
     setOverflow(result.overflow);
     setOverflowReasons(result.reasons);
     setBuildPulse((n) => n + 1);
     warnIfMarked(date, blocks.filter((b) => !b.auto).length);
-  }, [plans, date, settings, rules, mutateDay, warnIfMarked]);
+  }, [plans, date, settings, schedulerRulesNow, mutateDay, warnIfMarked]);
 
   const handleRebuildFromNow = useCallback(() => {
     const plan = plans[date];
@@ -1643,7 +1944,7 @@ export default function App() {
       completedIds.has(b.id) ? { ...b, completed: true } : b
     );
 
-    mutateDay(date, (p) => ({ ...p, blocks, tasks: [] }));
+    mutateDay(date, (p) => ({ ...p, blocks, tasks: [] }), 'the rebuild');
     setOverflow(result.overflow);
     setOverflowReasons(result.reasons);
     setBuildPulse((n) => n + 1);
@@ -1666,7 +1967,7 @@ export default function App() {
         mutateDay(day, (p) => ({
           ...p,
           blocks: p.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
-        }));
+        }), 'that change');
         return;
       }
 
@@ -1691,7 +1992,7 @@ export default function App() {
         blocks: outcome.blocks.map((b) =>
           b.id === id ? { ...b, ...rest } : b
         ),
-      }));
+      }), 'moving that entry');
       const note = describeReflow(outcome, formatDuration);
       if (note) setToast(note);
     },
@@ -1703,7 +2004,7 @@ export default function App() {
       mutateDay(day, (p) => ({
         ...p,
         blocks: p.blocks.map((b) => (b.id === id ? { ...b, pinned: !b.pinned } : b)),
-      }));
+      }), 'that resize');
     },
     [mutateDay]
   );
@@ -1733,8 +2034,10 @@ export default function App() {
       // Only close the source once the destination has accepted it, so a refused
       // move leaves both days untouched.
       const vacated = reflowRemove(source.blocks, id, settings.workingEnd);
-      mutateDay(from, (p) => ({ ...p, blocks: vacated.blocks }));
-      mutateDay(to, (p) => ({ ...p, blocks: landing.blocks }));
+      // Two calls, one gesture. They land in the same microtask, so the undo transaction
+      // covers both days and a single press puts the block back where it came from.
+      mutateDay(from, (p) => ({ ...p, blocks: vacated.blocks }), 'moving that to another day');
+      mutateDay(to, (p) => ({ ...p, blocks: landing.blocks }), 'moving that to another day');
 
       const note = describeReflow(landing, formatDuration);
       if (note) setToast(note);
@@ -1773,7 +2076,7 @@ export default function App() {
               }
             : b
         ),
-      }));
+      }), 'completing that entry');
 
       if (!nowCompleted || !block) return;
 
@@ -1813,7 +2116,7 @@ export default function App() {
       mutateDay(day, (p) => ({
         ...p,
         blocks: reflowRemove(p.blocks, id, settings.workingEnd).blocks,
-      }));
+      }), 'deleting that entry');
       setEditing(null);
     },
     [mutateDay, settings.workingEnd]
@@ -1837,20 +2140,24 @@ export default function App() {
         if (landing.message) setToast(landing.message);
         return;
       }
-      mutateDay(day, (p) => ({ ...p, blocks: landing.blocks }));
+      mutateDay(day, (p) => ({ ...p, blocks: landing.blocks }), 'adding that entry');
+      bumpModal();
       setEditing({ date: day, block });
       const note = describeReflow(landing, formatDuration);
       if (note) setToast(note);
     },
-    [mutateDay, categories, settings.workingEnd]
+    [bumpModal, mutateDay, categories, settings.workingEnd]
   );
 
   const handleEditBlock = useCallback(
     (day: string, id: string) => {
       const block = plansRef.current[day]?.blocks.find((b) => b.id === id);
-      if (block) setEditing({ date: day, block });
+      if (block) {
+        bumpModal();
+        setEditing({ date: day, block });
+      }
     },
-    []
+    [bumpModal]
   );
 
   /** "Add entry" in the toolbar — find the first free half hour and open the editor. */
@@ -2121,6 +2428,146 @@ export default function App() {
     [view]
   );
 
+  // -------------------------------------------------------------------------
+  // Keyboard
+  //
+  // Before this, four keydown listeners existed and all four only closed a modal — an app
+  // opened every morning and driven all day was mouse-only. This is also an accessibility
+  // floor rather than a power-user nicety: completing a block previously required hitting
+  // a small target inside a positioned div, with no keyboard route to it at all.
+  //
+  // A SELECTION IS REAL STATE, scoped to the displayed day. Up and down walk the day in
+  // schedule order, which is the order the grid draws — so the selection moves the way the
+  // eye does. It clears when the date changes, because a selection pointing at a block on
+  // a day you are no longer looking at is a trap.
+  //
+  // Every shortcut is refused while a modal is open or a field has focus. Typing "n" into
+  // a task title must never create a block, and that is the failure mode a global handler
+  // invites.
+  // -------------------------------------------------------------------------
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => setSelectedId(null), [date, view, nav]);
+
+  /** The day's blocks in the order they are drawn, which is the order to walk them in. */
+  const selectableBlocks = useMemo(
+    () => [...(plans[date]?.blocks ?? [])].sort((a, b) => a.start - b.start),
+    [plans, date]
+  );
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const meta = e.metaKey || e.ctrlKey;
+
+      // Undo works everywhere except inside a text field, where the browser's own undo is
+      // what the user means.
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target != null &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+
+      if (meta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        if (typing) return;
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      // Everything below is a bare key, so it must not fire while typing, while a modifier
+      // is held, or while any modal owns the screen.
+      if (typing || meta || e.altKey) return;
+      if (anyModalOpen) return;
+      if (nav !== 'calendar') return;
+
+      const blocks = selectableBlocks;
+      const index = selectedId ? blocks.findIndex((b) => b.id === selectedId) : -1;
+
+      switch (e.key) {
+        case 't':
+        case 'T':
+          e.preventDefault();
+          setTravel(date < todayKey ? 1 : -1);
+          setDate(todayKey);
+          return;
+        case 'ArrowLeft':
+          e.preventDefault();
+          handleStep(-1);
+          return;
+        case 'ArrowRight':
+          e.preventDefault();
+          handleStep(1);
+          return;
+        case '[':
+          e.preventDefault();
+          setView(view === 'month' ? 'week' : 'day');
+          return;
+        case ']':
+          e.preventDefault();
+          setView(view === 'day' ? 'week' : 'month');
+          return;
+        case 'n':
+        case 'N':
+          e.preventDefault();
+          handleQuickAdd();
+          return;
+        case 'b':
+        case 'B':
+          e.preventDefault();
+          if (view === 'day') handleBuildDay();
+          return;
+        case 'ArrowDown':
+          if (view !== 'day' || blocks.length === 0) return;
+          e.preventDefault();
+          setSelectedId(blocks[Math.min(blocks.length - 1, index + 1)].id);
+          return;
+        case 'ArrowUp':
+          if (view !== 'day' || blocks.length === 0) return;
+          e.preventDefault();
+          // From nothing selected, up selects the last block rather than the first, so the
+          // two arrows enter the list from opposite ends.
+          setSelectedId(blocks[index <= 0 ? blocks.length - 1 : index - 1].id);
+          return;
+        case ' ':
+          if (index < 0) return;
+          e.preventDefault();
+          handleToggleComplete(date, blocks[index].id);
+          return;
+        case 'Enter':
+          if (index < 0) return;
+          e.preventDefault();
+          handleEditBlock(date, blocks[index].id);
+          return;
+        case 'Escape':
+          if (selectedId) {
+            e.preventDefault();
+            setSelectedId(null);
+          }
+          return;
+        default:
+          return;
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    anyModalOpen,
+    date,
+    handleBuildDay,
+    handleEditBlock,
+    handleQuickAdd,
+    handleStep,
+    handleToggleComplete,
+    nav,
+    selectableBlocks,
+    selectedId,
+    todayKey,
+    undo,
+    view,
+  ]);
+
   useEffect(() => {
     setMonthCursor(date);
   }, [date]);
@@ -2152,7 +2599,10 @@ export default function App() {
         categoryTime={categoryTime}
         settings={settings}
         onOpenHours={() => setHoursOpen(true)}
-        onOpenBackup={() => setBackupOpen(true)}
+        onOpenBackup={() => {
+          bumpModal();
+          setBackupOpen(true);
+        }}
         badges={{
           goals: openGoals.length,
           routines: dueRoutines.filter((r) => r.streak.dueToday && !r.placed).length,
@@ -2185,9 +2635,18 @@ export default function App() {
               onAdd={handleQuickAdd}
               canReplan={canReplan && view === 'day'}
               onRebuildFromNow={handleRebuildFromNow}
+              undoCount={undoCount}
+              onUndo={undo}
               // The importer reads a whole month at once, so it is only offered
               // where a whole month is on screen.
-              onImportMarks={view === 'month' ? () => setMarksOpen(true) : undefined}
+              onImportMarks={
+                view === 'month'
+                  ? () => {
+                      bumpModal();
+                      setMarksOpen(true);
+                    }
+                  : undefined
+              }
               markSummary={view === 'month' ? markSummaryForCursor : ''}
               dayMark={markById(markDefs, dayMarks[date])}
             />
@@ -2214,6 +2673,7 @@ export default function App() {
                   <WeekStrip
                     weekKey={weekKey}
                     plans={plans}
+                    medians={weekMedians}
                     selected={date}
                     onSelectDay={handleOpenDay}
                     axisWidth={AXIS_W}
@@ -2234,6 +2694,8 @@ export default function App() {
                     onToggleComplete={handleToggleComplete}
                     onTogglePin={handleTogglePin}
                     onRefuse={setToast}
+                    selectedId={selectedId}
+                    onSelect={setSelectedId}
                     density="compact"
                   />
                 </div>
@@ -2258,6 +2720,8 @@ export default function App() {
                     onToggleComplete={handleToggleComplete}
                     onTogglePin={handleTogglePin}
                     onRefuse={setToast}
+                    selectedId={selectedId}
+                    onSelect={setSelectedId}
                     density="comfortable"
                   />
                 </div>
@@ -2337,6 +2801,12 @@ export default function App() {
               onReadInsight={handleReadInsight}
               insightWindowDays={INSIGHT_WINDOW_DAYS}
               quests={quests}
+              chains={chains}
+              season={liveSeason}
+              sealedSeasons={Object.keys(seasons).sort().map((k) => seasons[k])}
+              seasonFraction={seasonProgress(todayKey)}
+              commissions={commissions}
+              onOpenYearPage={() => setYearPageOpen(true)}
               daily={daily}
               weekly={weekly}
               awards={awards}
@@ -2403,6 +2873,7 @@ export default function App() {
       </main>
 
       <EditBlockModal
+        key={`edit:${modalEpoch}`}
         target={editing}
         categories={categories}
         onClose={() => setEditing(null)}
@@ -2412,9 +2883,14 @@ export default function App() {
           setEditing(null);
         }}
         onDelete={handleDeleteBlock}
+        today={todayKey}
+        brass={progress.brass}
+        commission={editing ? commissionFor(commissions, editing.block.id) ?? null : null}
+        onCommit={handleCommit}
       />
 
       <DayMarkImport
+        key={`marks:${modalEpoch}`}
         open={marksOpen}
         defs={markDefs}
         marks={dayMarks}
@@ -2434,6 +2910,7 @@ export default function App() {
       />
 
       <BackupModal
+        key={`backup:${modalEpoch}`}
         open={backupOpen}
         today={todayKey}
         onClose={() => setBackupOpen(false)}
@@ -2442,22 +2919,31 @@ export default function App() {
 
       {/* The reward layer. Three sizes, deliberately unequal — see XpToast. */}
       <XpFloat award={xpFloat} />
+      {/*
+        One queue, so these play in sequence rather than piling on top of each other. Each
+        renders only when it is the current moment; the queue's timer is the only thing
+        that advances it.
+      */}
       <RunKeptToast
-        run={runKept?.run ?? null}
-        seed={runKept?.seed ?? 0}
-        onDone={() => setRunKept(null)}
+        run={momentOf(rewards.current, 'runKept')?.run ?? null}
+        seed={momentOf(rewards.current, 'runKept')?.seed ?? 0}
       />
       <RunTakeover days={runTakeover} onDismiss={() => setRunTakeover(null)} />
-      <QuestDoneToast queue={questQueue} onDone={() => setQuestQueue((q) => q.slice(1))} />
-      <CodexUnlockToast queue={codexQueue} onDone={() => setCodexQueue((q) => q.slice(1))} />
+      <QuestDoneToast
+        quest={momentOf(rewards.current, 'quest')}
+        remaining={rewards.remaining}
+      />
+      <CodexUnlockToast
+        card={momentOf(rewards.current, 'codex')}
+        remaining={rewards.remaining}
+      />
       <BadgeUnlockToast
-        queue={badgeQueue}
-        onDone={() => setBadgeQueue((q) => q.slice(1))}
+        def={momentOf(rewards.current, 'badge')?.def ?? null}
+        remaining={rewards.remaining}
       />
       <LevelToast
-        standing={levelQueue[0] ?? null}
-        pending={Math.max(0, levelQueue.length - 1)}
-        onDone={() => setLevelQueue((q) => q.slice(1))}
+        standing={momentOf(rewards.current, 'level')?.standing ?? null}
+        pending={rewards.remaining}
       />
       <LevelTakeover
         standing={takeover?.standing ?? null}
@@ -2465,6 +2951,25 @@ export default function App() {
         prestige={takeover?.prestige ?? false}
         nextRank={standing.level < LEVELS_PER_CYCLE ? RANKS[standing.level] : null}
         onDismiss={() => setTakeover(null)}
+      />
+
+      {/*
+        The only screen here a person would show someone else. Built entirely from records
+        already kept, which is why it can be generated for any year after the fact.
+      */}
+      <YearPage
+        open={yearPageOpen}
+        year={Number(todayKey.slice(0, 4))}
+        stats={dayStats}
+        marks={dayMarks}
+        markDefs={markDefs}
+        seasons={Object.keys(seasons)
+          .sort()
+          .filter((k) => k.startsWith(todayKey.slice(0, 4)))
+          .map((k) => seasons[k])}
+        totalXp={progress.totalXp}
+        onClose={() => setYearPageOpen(false)}
+        onNotify={setToast}
       />
 
       <Toast message={toast} onDismiss={() => setToast(null)} />
@@ -2518,10 +3023,12 @@ function WorkingHoursModal({
 }) {
   const [start, setStart] = useState(minutesTo24h(settings.workingStart));
   const [end, setEnd] = useState(minutesTo24h(settings.workingEnd));
+  const [useInsights, setUseInsights] = useState(settings.useInsightScheduling);
 
   useEffect(() => {
     setStart(minutesTo24h(settings.workingStart));
     setEnd(minutesTo24h(settings.workingEnd));
+    setUseInsights(settings.useInsightScheduling);
   }, [settings, open]);
 
   useEffect(() => {
@@ -2543,7 +3050,7 @@ function WorkingHoursModal({
       onError('The end of your working day has to come after the start.');
       return;
     }
-    onSave({ workingStart: s, workingEnd: e });
+    onSave({ workingStart: s, workingEnd: e, useInsightScheduling: useInsights });
     onClose();
   }
 
@@ -2615,6 +3122,32 @@ function WorkingHoursModal({
                 />
               </div>
             </div>
+
+            {/*
+              The one place a codex finding is allowed to change behaviour rather than
+              just report it, so it asks rather than assumes. Off by default: the build
+              button's output should be predictable until you decide otherwise, and a
+              scheduler that quietly changed its mind as history accumulated would be hard
+              to trust and harder to debug.
+            */}
+            <label className="flex items-start gap-2.5 mt-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useInsights}
+                onChange={(e) => setUseInsights(e.target.checked)}
+                className="mt-0.5 shrink-0"
+              />
+              <span className="min-w-0">
+                <span className="text-[12.5px] text-ink-1 block">
+                  Build around when you actually finish things
+                </span>
+                <span className="text-[11px] text-ink-3 block leading-relaxed mt-0.5">
+                  Uses the codex&rsquo;s completion history to prefer each category&rsquo;s
+                  strongest part of the day. Only ever chooses between tasks that already
+                  fit the slot, and does nothing until there is enough history to be sure.
+                </span>
+              </span>
+            </label>
 
             <div className="flex justify-end gap-2 mt-5">
               <button

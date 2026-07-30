@@ -606,6 +606,51 @@ export function reconcileDays(
   return { progress: p, stats: s, changed, xpDelta: delta };
 }
 
+
+/**
+ * Median completion ratio for each weekday, over the trailing weeks.
+ *
+ * The progression layer can say how you did today and how long your run is, but nothing in
+ * it could answer "am I actually getting better at Tuesdays?" — which is the question a
+ * calendar is uniquely able to answer and the reason to keep history at all.
+ *
+ * MEDIAN, not mean. One abandoned day drags a four-sample mean into uselessness, and the
+ * whole point is a line steady enough to be worth comparing against.
+ *
+ * RATIO, not minutes, so the ghost shares an axis with the live bar it sits behind. Two
+ * bars on the same scale can be compared at a glance; two bars measuring different things
+ * are a chart that needs a legend.
+ *
+ * Returns nothing for a weekday with fewer than `minSamples` days of history. A ghost drawn
+ * from one previous Tuesday is not a baseline, it is last Tuesday.
+ */
+export function weekdayMedians(
+  stats: Record<string, DailyStat>,
+  dates: string[],
+  weeks = 4,
+  minSamples = 2
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const date of dates) {
+    const samples: number[] = [];
+    for (let w = 1; w <= weeks; w++) {
+      const past = shiftDateKey(date, -7 * w);
+      const stat = stats[past];
+      // Only days that had a plan. A day with nothing booked scored zero for a reason that
+      // has nothing to do with how the weekday usually goes.
+      if (stat && stat.plannedMinutes > 0) samples.push(dayScore(stat));
+    }
+    if (samples.length < minSamples) continue;
+    samples.sort((a, b) => a - b);
+    const mid = Math.floor(samples.length / 2);
+    out[date] =
+      samples.length % 2 === 1
+        ? samples[mid]
+        : (samples[mid - 1] + samples[mid]) / 2;
+  }
+  return out;
+}
+
 /** Trailing-window trim. Day stats are a rolling record, not an archive. */
 export const STAT_RETENTION_DAYS = 400;
 

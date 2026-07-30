@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Pin, PinOff, Trash2, X } from 'lucide-react';
 import type { Block, CategoryDef } from '../types';
+import { payoutFor, STAKES, type Commission } from '../commissions';
 import { colorsFor } from '../utils/color';
 import { minutesTo24h, parse24h } from '../utils/time';
 
@@ -27,6 +28,12 @@ interface Props {
   onClose: () => void;
   onSave: (date: string, id: string, patch: Partial<Block>, moveTo?: string) => void;
   onDelete: (date: string, id: string) => void;
+  /** Today, so a commission can only be offered on a future day. */
+  today: string;
+  brass: number;
+  /** The open commission on this block, if there is one. */
+  commission: Commission | null;
+  onCommit: (date: string, blockId: string, stake: number) => void;
 }
 
 export default function EditBlockModal({
@@ -35,25 +42,23 @@ export default function EditBlockModal({
   onClose,
   onSave,
   onDelete,
+  today,
+  brass,
+  commission,
+  onCommit,
 }: Props) {
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState('');
-  const [start, setStart] = useState('');
-  const [end, setEnd] = useState('');
-  const [category, setCategory] = useState('other');
-  const [pinned, setPinned] = useState(false);
+  // Initialised from the target rather than reset by an effect afterwards. App gives this
+  // component a `key` that changes each time a block is opened for editing, so it remounts
+  // with the right values instead of rendering blank ones for a frame first.
+  const [title, setTitle] = useState(target?.block.title ?? '');
+  const [date, setDate] = useState(target?.date ?? '');
+  const [start, setStart] = useState(
+    target ? minutesTo24h(target.block.start) : ''
+  );
+  const [end, setEnd] = useState(target ? minutesTo24h(target.block.end) : '');
+  const [category, setCategory] = useState(target?.block.category ?? 'other');
+  const [pinned, setPinned] = useState(target?.block.pinned === true);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!target) return;
-    setTitle(target.block.title);
-    setDate(target.date);
-    setStart(minutesTo24h(target.block.start));
-    setEnd(minutesTo24h(target.block.end));
-    setCategory(target.block.category);
-    setPinned(target.block.pinned === true);
-    setError(null);
-  }, [target]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -249,6 +254,16 @@ export default function EditBlockModal({
               </AnimatePresence>
             </div>
 
+            {target && (
+              <CommissionRow
+                target={target}
+                today={today}
+                brass={brass}
+                commission={commission}
+                onCommit={onCommit}
+              />
+            )}
+
             <div className="flex items-center justify-between mt-5 pt-3.5 border-t border-rule-2">
               <button
                 onClick={() => target && onDelete(target.date, target.block.id)}
@@ -284,5 +299,83 @@ export default function EditBlockModal({
 function Label({ children }: { children: React.ReactNode }) {
   return (
     <label className="smallcaps text-[9px] text-bone-3 block mb-1.5">{children}</label>
+  );
+}
+
+/**
+ * Staking brass on this block.
+ *
+ * Offered only on a future day, and only on work you own — the rules live in
+ * commissions.ts, and this asks rather than duplicating them, so the UI cannot drift from
+ * what `placeCommission` will actually allow.
+ *
+ * The payout is stated on every button rather than once above them. "Stake 100" and "get
+ * 200 back" are the same decision, and splitting them across two lines is how a commitment
+ * device starts reading like a gamble.
+ */
+function CommissionRow({
+  target,
+  today,
+  brass,
+  commission,
+  onCommit,
+}: {
+  target: EditTarget;
+  today: string;
+  brass: number;
+  commission: Commission | null;
+  onCommit: (date: string, blockId: string, stake: number) => void;
+}) {
+  // Same gate as `placeCommission`, so nothing is offered that would then be refused.
+  const eligible =
+    target.date > today && !target.block.auto && target.block.completed !== true;
+
+  if (commission) {
+    return (
+      <div
+        className="mt-4 px-3 py-2.5"
+        style={{ background: 'var(--chassis-1)', border: '1px solid var(--signal)' }}
+      >
+        <div className="font-mono text-[10.5px] tracking-wide" style={{ color: 'var(--signal)' }}>
+          COMMISSIONED
+        </div>
+        <div className="text-[12px] text-ink-2 mt-0.5 leading-relaxed">
+          {commission.stake.toLocaleString()} brass staked on this. Finish it and{' '}
+          {payoutFor(commission.stake).toLocaleString()} comes back; let the day pass and the
+          stake is gone.
+        </div>
+      </div>
+    );
+  }
+
+  if (!eligible) return null;
+
+  return (
+    <div className="mt-4 pt-3.5 border-t border-rule-2">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="smallcaps text-[9px] text-bone-3">Commission</div>
+          <div className="text-[11.5px] text-ink-3 leading-relaxed max-w-[46ch] mt-0.5">
+            Stake brass on finishing this. Kept, it pays double. Missed, it is gone.
+          </div>
+        </div>
+        <span className="font-mono text-[10.5px] tnum text-bone-3 shrink-0">
+          {brass.toLocaleString()} available
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+        {STAKES.map((stake) => (
+          <button
+            key={stake}
+            disabled={brass < stake}
+            onClick={() => onCommit(target.date, target.block.id, stake)}
+            title={`Stake ${stake} to win ${payoutFor(stake)}`}
+            className="btn-quiet font-mono text-[11px] px-2.5 py-1.5 rounded-lg tnum disabled:opacity-40"
+          >
+            {stake} &rarr; {payoutFor(stake)}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseTaskLine } from './parser';
+import { format12h, formatHourLabel } from './utils/time';
 
 // These tests LOCK current parser behavior (they document, not redesign it).
 describe('parseTaskLine', () => {
@@ -87,5 +88,33 @@ describe('parseTaskLine', () => {
 
   it('leaves a plain line as just a title with no inferred fields', () => {
     expect(parseTaskLine('just a plain title')).toEqual({ title: 'just a plain title' });
+  });
+});
+
+describe('clock labels wrap at midnight', () => {
+  it('never shows the afternoon twice', () => {
+    // The visible symptom of the missing reflow ceiling: with no `% 24`, values at or
+    // past 1440 read as noon onward, and the grid drew "10 PM, 11 PM, 12 PM, 1 PM".
+    expect(formatHourLabel(1440)).toBe('12 AM');
+    expect(formatHourLabel(1500)).toBe('1 AM');
+    expect(formatHourLabel(1560)).toBe('2 AM');
+    expect(format12h(1470)).toBe('12:30 am');
+    expect(format12h(1530)).toBe('1:30 am');
+  });
+
+  it('still reads the ordinary day correctly', () => {
+    expect(formatHourLabel(0)).toBe('12 AM');
+    expect(formatHourLabel(540)).toBe('9 AM');
+    expect(formatHourLabel(720)).toBe('12 PM');
+    expect(formatHourLabel(780)).toBe('1 PM');
+    expect(formatHourLabel(1380)).toBe('11 PM');
+    expect(format12h(0)).toBe('12:00 am');
+    expect(format12h(720)).toBe('12:00 pm');
+    expect(format12h(1425)).toBe('11:45 pm');
+  });
+
+  it('wraps a whole extra day rather than accumulating', () => {
+    expect(formatHourLabel(2880)).toBe('12 AM');
+    expect(formatHourLabel(2880 + 540)).toBe('9 AM');
   });
 });

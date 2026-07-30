@@ -72,17 +72,15 @@ export const XpFloat = memo(function XpFloat({ award }: { award: FloatingXp | nu
 export const LevelToast = memo(function LevelToast({
   standing,
   pending = 0,
-  onDone,
 }: {
   standing: Standing | null;
-  /** How many further level-ups are still queued behind this one. */
+  /** How many further reward moments are still queued behind this one. */
   pending?: number;
-  onDone: () => void;
 }) {
   const reduced = useReducedMotion();
   return (
     <div className="fixed right-6 bottom-6 z-[60] pointer-events-none">
-      <AnimatePresence onExitComplete={onDone}>
+      <AnimatePresence>
         {standing && (
           <motion.div
             key={`${standing.prestige}:${standing.level}`}
@@ -240,16 +238,15 @@ export const TakeoverShell = memo(function TakeoverShell({
 export const RunKeptToast = memo(function RunKeptToast({
   run,
   seed,
-  onDone,
 }: {
   run: number | null;
   seed: number;
-  onDone: () => void;
 }) {
   const reduced = useReducedMotion();
   return (
     <div className="fixed left-1/2 -translate-x-1/2 bottom-32 z-[62] pointer-events-none">
-      <AnimatePresence onExitComplete={onDone}>
+      {/* The queue owns removal; this renders what it is handed. */}
+      <AnimatePresence>
         {run != null && (
           <motion.div
             key={seed}

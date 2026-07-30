@@ -91,18 +91,10 @@ export default function DayMarkImport({
   const dragRef = useRef<{ x: number; y: number } | null>(null);
 
 
-  useEffect(() => {
-    if (!open) {
-      setStep('paste');
-      setSrc(null);
-      setProposal({});
-      setSampled({});
-      setFrame({ x: 0, y: 0, w: 1, h: 1 });
-    } else {
-      setFirstCell(defaultFirstCell(initialMonth, 0));
-      setRows(rowsNeeded(initialMonth, 0));
-    }
-  }, [open, initialMonth]);
+  // No reset effect. App keys this component on an epoch that changes each time the
+  // importer is opened, so it remounts and every `useState` initialiser below runs again
+  // with the current month. Resetting in an effect meant the previous screenshot rendered
+  // for one frame every time the importer reopened.
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {

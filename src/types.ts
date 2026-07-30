@@ -643,11 +643,20 @@ export type ViewMode = 'day' | 'week' | 'month';
 export interface Settings {
   workingStart: number; // minutes since midnight
   workingEnd: number;
+  /**
+   * Let the codex's findings steer where the build puts things.
+   *
+   * Off by default, deliberately. The build button's output should be predictable until
+   * you ask for it to be clever, and a scheduler that quietly changed its mind as history
+   * accumulated would be hard to trust and harder to debug.
+   */
+  useInsightScheduling: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   workingStart: 8 * 60,
   workingEnd: 19 * 60,
+  useInsightScheduling: false,
 };
 
 // Note: the week deliberately always starts on Monday, and is not configurable.

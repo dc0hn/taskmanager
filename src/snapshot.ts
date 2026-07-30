@@ -1,4 +1,4 @@
-import { exportAll } from './storage';
+import { exportAll, importAll } from './storage';
 import { daysBetween } from './streaks';
 
 // ============================================================================
@@ -99,10 +99,15 @@ export function backendAvailable(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-/** The one call into the backend. Isolated so everything above it stays testable. */
+/** The two calls into the backend. Isolated so everything above them stays testable. */
 async function invokeWrite(contents: string): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<string>('write_snapshot', { contents });
+}
+
+async function invokeRead(previous: boolean): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('read_snapshot', { previous });
 }
 
 export interface SnapshotOutcome {
@@ -148,4 +153,45 @@ export async function snapshotIfDue(today: string): Promise<SnapshotOutcome | nu
   if (!backendAvailable()) return null;
   if (!snapshotDue(loadSnapshotRecord(), today)) return null;
   return takeSnapshot(today);
+}
+
+export interface RestoreOutcome {
+  ok: boolean;
+  message: string;
+  written: number;
+}
+
+/**
+ * Read the snapshot back and put it through the ordinary import path.
+ *
+ * Deliberately `importAll` rather than anything new: a snapshot is an export document, so
+ * every record goes through the same normalisers as a hand-pasted file. A snapshot that
+ * had picked up a bad record restores whatever was salvageable instead of installing the
+ * damage — which is the behaviour the import path was written for.
+ *
+ * `replace` is the caller's decision and it is the consequential one. Replacing wipes
+ * what is currently stored; merging leaves anything the snapshot does not mention. The UI
+ * asks, and defaults to replacing, because a restore is almost always "this profile is
+ * wrong, put the good one back".
+ */
+export async function restoreFromSnapshot(
+  replace: boolean,
+  previous = false
+): Promise<RestoreOutcome> {
+  if (!backendAvailable()) {
+    return {
+      ok: false,
+      message: 'Snapshots need the desktop app \u2014 this is the dev server.',
+      written: 0,
+    };
+  }
+  try {
+    const json = await invokeRead(previous);
+    const result = importAll(json, replace);
+    return { ok: result.ok, message: result.message, written: result.written };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error('Almanac: restore failed', e);
+    return { ok: false, message: `Restore failed: ${message}`, written: 0 };
+  }
 }

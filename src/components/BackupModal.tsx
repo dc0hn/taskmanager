@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, ClipboardCopy, Download, HardDriveDownload, Upload, X } from 'lucide-react';
+import {
+  Check,
+  ClipboardCopy,
+  Download,
+  HardDriveDownload,
+  RotateCcw,
+  Upload,
+  X,
+} from 'lucide-react';
 import { exportAll, importAll } from '../storage';
 import {
   backendAvailable,
   loadSnapshotRecord,
+  restoreFromSnapshot,
   takeSnapshot,
   type SnapshotRecord,
 } from '../snapshot';
@@ -49,15 +58,6 @@ export default function BackupModal({ open, today, onClose, onNotify }: Props) {
       bytes: JSON.stringify(doc).length,
     };
   }, [open, today]);
-
-  useEffect(() => {
-    if (!open) {
-      setPaste('');
-      setCopied(false);
-      setTab('export');
-      setReplace(false);
-    }
-  }, [open]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -266,7 +266,8 @@ function SnapshotRow({
   onNotify: (message: string) => void;
 }) {
   const [record, setRecord] = useState<SnapshotRecord>(() => loadSnapshotRecord());
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'write' | 'restore' | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   if (!backendAvailable()) {
     return (
@@ -280,10 +281,18 @@ function SnapshotRow({
   }
 
   async function run() {
-    setBusy(true);
+    setBusy('write');
     const outcome = await takeSnapshot(today);
     setRecord(loadSnapshotRecord());
-    setBusy(false);
+    setBusy(null);
+    onNotify(outcome.message);
+  }
+
+  async function doRestore(previous: boolean) {
+    setBusy('restore');
+    setConfirming(false);
+    const outcome = await restoreFromSnapshot(true, previous);
+    setBusy(null);
     onNotify(outcome.message);
   }
 
@@ -313,15 +322,67 @@ function SnapshotRow({
             </div>
           )}
         </div>
-        <button
-          onClick={run}
-          disabled={busy}
-          className="btn-quiet inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg shrink-0 disabled:opacity-50"
-        >
-          <HardDriveDownload size={13} strokeWidth={2.2} />
-          {busy ? 'Writing…' : 'Snapshot now'}
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={run}
+            disabled={busy !== null}
+            className="btn-quiet inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg disabled:opacity-50"
+          >
+            <HardDriveDownload size={13} strokeWidth={2.2} />
+            {busy === 'write' ? 'Writing…' : 'Snapshot now'}
+          </button>
+          {record.lastOn && (
+            <button
+              onClick={() => setConfirming(true)}
+              disabled={busy !== null}
+              className="btn-quiet inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg disabled:opacity-50"
+            >
+              <RotateCcw size={13} strokeWidth={2.2} />
+              {busy === 'restore' ? 'Restoring…' : 'Restore'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/*
+        Restoring replaces what is currently stored, so it asks first and says what it
+        will do in the words of the thing it destroys. The generation choice is offered
+        here rather than buried: the reason to restore is often that the current snapshot
+        caught state which had already gone wrong, and the copy behind it is the answer.
+      */}
+      {confirming && (
+        <div
+          className="mt-2.5 px-3 py-2.5"
+          style={{ background: 'var(--chassis-1)', border: '1px solid var(--warn)' }}
+        >
+          <div className="text-[12px] text-ink-1 leading-relaxed max-w-[70ch]">
+            Restoring replaces every record now in Almanac with the ones in the snapshot.
+            Anything done since {record.lastOn || 'it was written'} will be gone. Your
+            snapshot file is not modified either way.
+          </div>
+          <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
+            <button
+              onClick={() => void doRestore(false)}
+              className="btn-primary text-[12px] px-3 py-1.5 rounded-lg"
+            >
+              Restore latest
+            </button>
+            <button
+              onClick={() => void doRestore(true)}
+              className="btn-quiet text-[12px] px-3 py-1.5 rounded-lg"
+              title="The generation kept behind the current one"
+            >
+              Restore the one before
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              className="btn-quiet text-[12px] px-3 py-1.5 rounded-lg"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

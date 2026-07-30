@@ -15,6 +15,11 @@ import { weekDates } from '../week';
 interface Props {
   weekKey: string;
   plans: Record<string, DayPlan>;
+  /**
+   * The trailing median completion ratio for each date's weekday, where enough history
+   * exists. Drawn as a ghost behind the live bar.
+   */
+  medians?: Record<string, number>;
   selected: string;
   onSelectDay: (date: string) => void;
   /** Matches TimeGrid's axis gutter so headers line up with their columns. */
@@ -26,6 +31,7 @@ interface Props {
 function WeekStrip({
   weekKey,
   plans,
+  medians = {},
   selected,
   onSelectDay,
   axisWidth,
@@ -50,6 +56,7 @@ function WeekStrip({
           .reduce((sum, b) => sum + (b.end - b.start), 0);
         const pct = minutes > 0 ? (doneMinutes / minutes) * 100 : 0;
         const mark = markById(markDefs, marks[date]);
+        const ghost = medians[date] ?? null;
 
         return (
           <button
@@ -115,12 +122,40 @@ function WeekStrip({
                 {minutes > 0 ? formatDuration(minutes) : '—'}
               </span>
             </div>
+            {/*
+              Two bars on one axis: the live one, and a ghost of how this weekday usually
+              goes.
+              
+              This is the only thing in the app that answers "am I actually improving?".
+              Everything else in the progression layer reports today against nothing. The
+              ghost is the trailing four-week median for this weekday — a median rather than
+              a mean because one abandoned day ruins a four-sample average, and a ratio
+              rather than minutes so it shares the live bar's scale and needs no legend.
+              
+              Absent for a weekday with under two days of history, because a baseline drawn
+              from one previous Tuesday is not a baseline, it is last Tuesday.
+            */}
             <div
-              className="mt-1 h-[2px] rounded-full overflow-hidden"
+              className="mt-1 h-[3px] rounded-full overflow-hidden relative"
               style={{ background: minutes > 0 ? 'rgba(245, 242, 236,0.07)' : 'transparent' }}
+              title={
+                ghost == null
+                  ? undefined
+                  : `${Math.round(pct)}% done \u2014 usually ${Math.round(ghost * 100)}% on a ${d.toLocaleDateString(undefined, { weekday: 'long' })}`
+              }
             >
+              {ghost != null && (
+                <span
+                  aria-hidden
+                  className="absolute inset-y-0 left-0 rounded-full"
+                  style={{
+                    width: `${Math.min(100, ghost * 100)}%`,
+                    background: 'rgba(245, 242, 236,0.22)',
+                  }}
+                />
+              )}
               <div
-                className="h-full rounded-full transition-all duration-500"
+                className="h-full rounded-full transition-all duration-500 relative"
                 style={{ width: `${pct}%`, background: 'var(--good)' }}
               />
             </div>

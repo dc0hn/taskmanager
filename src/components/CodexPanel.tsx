@@ -232,18 +232,18 @@ function InsightCard({
 
 /** The unseal moment. */
 export const CodexUnlockToast = memo(function CodexUnlockToast({
-  queue,
-  onDone,
+  card,
+  remaining,
 }: {
-  queue: { name: string; glyph: string; xp: number }[];
-  onDone: () => void;
+  card: { name: string; glyph: string; xp: number } | null;
+  remaining: number;
 }) {
   const reduced = useReducedMotion();
-  const current = queue[0] ?? null;
+  const current = card;
 
   return (
     <div className="fixed left-1/2 -translate-x-1/2 bottom-6 z-[62] pointer-events-none">
-      <AnimatePresence onExitComplete={onDone}>
+      <AnimatePresence>
         {current && (
           <motion.div
             key={current.name}
@@ -266,7 +266,7 @@ export const CodexUnlockToast = memo(function CodexUnlockToast({
                 style={{ fontSize: 9.5, letterSpacing: '0.16em', color: 'var(--signal)' }}
               >
                 CODEX UNSEALED
-                {queue.length > 1 && ` · ${queue.length - 1} MORE`}
+                {remaining > 0 && ` · ${remaining} MORE`}
               </div>
               <div
                 className="font-display"

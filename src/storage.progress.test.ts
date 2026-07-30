@@ -388,3 +388,39 @@ function shiftKey(dateKey: string, days: number): string {
   const dd = String(out.getUTCDate()).padStart(2, '0');
   return `${out.getUTCFullYear()}-${mm}-${dd}`;
 }
+
+describe('blocks are bounded to the day on read', () => {
+  it('drops a block that runs past midnight', () => {
+    // The reflow ceiling stops one being created; this stops an imported or hand-edited
+    // profile reintroducing it, which would put the grid back into drawing two
+    // afternoons.
+    savePlan({
+      date: DAY,
+      tasks: [],
+      blocks: [
+        { id: 'ok', title: 'Fine', start: 540, end: 600, category: 'deep' },
+        { id: 'over', title: 'Past midnight', start: 1400, end: 1500, category: 'deep' },
+      ],
+    });
+    const back = loadPlan(DAY);
+    expect(back.blocks.map((b) => b.id)).toEqual(['ok']);
+  });
+
+  it('keeps a block ending exactly at midnight', () => {
+    savePlan({
+      date: DAY,
+      tasks: [],
+      blocks: [{ id: 'last', title: 'Last', start: 1380, end: 1440, category: 'deep' }],
+    });
+    expect(loadPlan(DAY).blocks).toHaveLength(1);
+  });
+
+  it('drops a block starting before midnight of its own day', () => {
+    savePlan({
+      date: DAY,
+      tasks: [],
+      blocks: [{ id: 'neg', title: 'Negative', start: -60, end: 60, category: 'deep' }],
+    });
+    expect(loadPlan(DAY).blocks).toEqual([]);
+  });
+});

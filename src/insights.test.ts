@@ -13,6 +13,8 @@ import {
   unlockedCount,
   unlocksDue,
   insightIdFromKey,
+  strongestWindows,
+  WINDOW_MIN_SAMPLES,
   type InsightContext,
 } from './insights';
 import { payoutXp } from './types';
@@ -535,5 +537,92 @@ describe('sorting the codex', () => {
     for (let i = 1; i < sealed.length; i++) {
       expect(sealed[i - 1].progress).toBeGreaterThanOrEqual(sealed[i].progress);
     }
+  });
+});
+
+describe('strongestWindows — the one finding fed back into behaviour', () => {
+  /** N completions of `category`, all stamped at `at`. */
+  const at = (category: string, minute: number, n: number) => {
+    const days = Array.from({ length: n }, (_, i) => ({
+      date: `2026-07-${String((i % 28) + 1).padStart(2, '0')}`,
+      blocks: [
+        {
+          id: `b${category}${i}`,
+          title: 'x',
+          start: 540,
+          end: 600,
+          category,
+          completed: true,
+          completedAt: minute,
+        },
+      ],
+    }));
+    return { days, stats: {}, categories: DEFAULT_CATEGORIES };
+  };
+
+  it('says nothing until there is enough history', () => {
+    // The guard that keeps this honest. Four completions is four data points, not a
+    // pattern, and moving someone's schedule on it would be worse than doing nothing.
+    const thin = at('deep', 600, WINDOW_MIN_SAMPLES - 1);
+    expect(strongestWindows(thin)).toEqual({});
+  });
+
+  it('finds the window a category actually finishes in', () => {
+    const morning = at('deep', 600, WINDOW_MIN_SAMPLES + 4); // 10:00
+    const found = strongestWindows(morning);
+    expect(found.deep).toEqual({ from: 540, to: 720 });
+  });
+
+  it('says nothing when there is no clear winner', () => {
+    // A tie is not a finding. Preferring one side of a coin flip would move work for no
+    // reason and make the build unpredictable.
+    const half = WINDOW_MIN_SAMPLES;
+    const a = at('deep', 600, half);
+    const b = at('deep', 900, half);
+    const mixed = {
+      days: [...a.days, ...b.days.map((d, i) => ({ ...d, date: `2026-08-${String(i + 1).padStart(2, '0')}` }))],
+      stats: {},
+      categories: DEFAULT_CATEGORIES,
+    };
+    expect(strongestWindows(mixed)).toEqual({});
+  });
+
+  it('keeps categories independent', () => {
+    const morning = at('deep', 600, WINDOW_MIN_SAMPLES + 2);
+    const evening = at('admin', 1100, WINDOW_MIN_SAMPLES + 2);
+    const both = {
+      days: [
+        ...morning.days,
+        ...evening.days.map((d, i) => ({ ...d, date: `2026-09-${String(i + 1).padStart(2, '0')}` })),
+      ],
+      stats: {},
+      categories: DEFAULT_CATEGORIES,
+    };
+    const found = strongestWindows(both);
+    expect(found.deep).toEqual({ from: 540, to: 720 });
+    expect(found.admin).toEqual({ from: 1020, to: 1440 });
+  });
+
+  it('ignores completions with no timestamp', () => {
+    // Every block completed before completedAt existed. Treating absence as a time would
+    // invent history.
+    const ctx = {
+      days: [
+        {
+          date: '2026-07-01',
+          blocks: Array.from({ length: 20 }, (_, i) => ({
+            id: `n${i}`,
+            title: 'x',
+            start: 540,
+            end: 600,
+            category: 'deep',
+            completed: true,
+          })),
+        },
+      ],
+      stats: {},
+      categories: DEFAULT_CATEGORIES,
+    };
+    expect(strongestWindows(ctx)).toEqual({});
   });
 });

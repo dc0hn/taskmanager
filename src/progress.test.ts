@@ -20,6 +20,7 @@ import {
   reckonDay,
   reconcileDay,
   reconcileDays,
+  weekdayMedians,
   scorable,
   SIGIL_FORMS,
   standingFor,
@@ -963,5 +964,91 @@ describe('the brass balance across a spend', () => {
     const untick = reconcileDay(tick.progress, tick.stats, '2026-07-30', [one(false)], cats);
     expect(untick.progress.brass).toBe(0);
     expect(brassEarned(untick.progress)).toBe(0);
+  });
+});
+
+describe('weekdayMedians — the trailing ghost', () => {
+  const stat = (date: string, planned: number, done: number): DailyStat => ({
+    date,
+    plannedMinutes: planned,
+    doneMinutes: done,
+    xpEarned: 0,
+    brassEarned: 0,
+    bestCombo: 0,
+    cleared: planned > 0 && done >= planned,
+    completedCount: 0,
+    focusMinutes: 0,
+  });
+
+  /** Same weekday, `weeks` back from `date`. */
+  const back = (date: string, weeks: number) => {
+    const [y, m, d] = date.split('-').map(Number);
+    const t = Date.UTC(y, m - 1, d) - weeks * 7 * 86_400_000;
+    const o = new Date(t);
+    return `${o.getUTCFullYear()}-${String(o.getUTCMonth() + 1).padStart(2, '0')}-${String(o.getUTCDate()).padStart(2, '0')}`;
+  };
+
+  const TODAY = '2026-07-30';
+
+  it('says nothing with too little history', () => {
+    // One previous Tuesday is not a baseline, it is last Tuesday.
+    const stats = { [back(TODAY, 1)]: stat(back(TODAY, 1), 300, 300) };
+    expect(weekdayMedians(stats, [TODAY])).toEqual({});
+  });
+
+  it('takes the median of the trailing same-weekdays', () => {
+    const stats: Record<string, DailyStat> = {};
+    // Scores 1.0, 0.5, 0.25, 0.0 -> median of the middle two is 0.375.
+    const scores = [1, 0.5, 0.25, 0];
+    scores.forEach((sc, i) => {
+      const d = back(TODAY, i + 1);
+      stats[d] = stat(d, 400, 400 * sc);
+    });
+    expect(weekdayMedians(stats, [TODAY])[TODAY]).toBeCloseTo(0.375, 5);
+  });
+
+  it('is unmoved by one abandoned day, which a mean would not be', () => {
+    // The reason for a median. Three good Tuesdays and one write-off should still read as
+    // a good Tuesday.
+    const stats: Record<string, DailyStat> = {};
+    [1, 1, 1, 0].forEach((sc, i) => {
+      const d = back(TODAY, i + 1);
+      stats[d] = stat(d, 300, 300 * sc);
+    });
+    expect(weekdayMedians(stats, [TODAY])[TODAY]).toBe(1);
+  });
+
+  it('ignores days that had nothing planned', () => {
+    // A blank day scored zero for reasons that have nothing to do with the weekday, so
+    // counting it would drag every baseline toward zero over a holiday.
+    const stats: Record<string, DailyStat> = {};
+    stats[back(TODAY, 1)] = stat(back(TODAY, 1), 300, 300);
+    stats[back(TODAY, 2)] = stat(back(TODAY, 2), 300, 300);
+    stats[back(TODAY, 3)] = stat(back(TODAY, 3), 0, 0);
+    stats[back(TODAY, 4)] = stat(back(TODAY, 4), 0, 0);
+    expect(weekdayMedians(stats, [TODAY])[TODAY]).toBe(1);
+  });
+
+  it('never exceeds one, so the ghost cannot overrun its track', () => {
+    const stats: Record<string, DailyStat> = {};
+    for (let i = 1; i <= 4; i++) {
+      const d = back(TODAY, i);
+      stats[d] = stat(d, 100, 500); // wildly over
+    }
+    expect(weekdayMedians(stats, [TODAY])[TODAY]).toBe(1);
+  });
+
+  it('keeps weekdays independent', () => {
+    const monday = '2026-07-27';
+    const stats: Record<string, DailyStat> = {};
+    for (let i = 1; i <= 4; i++) {
+      const t = back(TODAY, i);
+      const m = back(monday, i);
+      stats[t] = stat(t, 300, 300);
+      stats[m] = stat(m, 300, 60);
+    }
+    const found = weekdayMedians(stats, [monday, TODAY]);
+    expect(found[TODAY]).toBe(1);
+    expect(found[monday]).toBeCloseTo(0.2, 5);
   });
 });

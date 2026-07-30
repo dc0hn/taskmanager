@@ -43,6 +43,23 @@ import type { Block } from './types';
  */
 export const ADJACENCY_TOLERANCE = 5;
 
+/**
+ * The end of the day, in minutes since midnight. A hard ceiling on every cascade.
+ *
+ * There was no upper bound at all, and the consequence was worse than an off-by-one: a
+ * cascade could push a block past 1440, and because the grid's visible window stretches
+ * to cover the latest block end, the time axis grew past 24 hours. The hour labels then
+ * read "… 10 PM, 11 PM, 12 PM, 1 PM …" — the afternoon appearing twice — because
+ * `((h24 + 11) % 12) + 1` has no `% 24` in it.
+ *
+ * It also opened the door wider each time. Direct dragging clamps to the visible window,
+ * but the window is derived from block ends, so one over-midnight block raised the clamp
+ * and let the next drag go further still.
+ *
+ * A block ending exactly at 1440 is fine; that is midnight, and the day is over.
+ */
+export const DAY_END = 24 * 60;
+
 export interface ReflowOutcome {
   /** False when nothing could be done; `blocks` is then the original array. */
   ok: boolean;
@@ -101,13 +118,19 @@ function placeAround(
   others: Block[],
   start: number,
   end: number
-): { blocks: Block[]; movedIds: string[]; blockedBy: Block | null } {
+): {
+  blocks: Block[];
+  movedIds: string[];
+  blockedBy: Block | null;
+  /** Set when the cascade could not fit this block before midnight. */
+  overflowed: Block | null;
+} {
   const immovables = others.filter(isImmovable);
 
   // The destination is unusable if fixed work already holds it.
   const blockedBy =
     immovables.find((o) => overlaps(start, end, o.start, o.end)) ?? null;
-  if (blockedBy) return { blocks: others, movedIds: [], blockedBy };
+  if (blockedBy) return { blocks: others, movedIds: [], blockedBy, overflowed: null };
 
   const obstacles = [
     { start, end },
@@ -124,12 +147,18 @@ function placeAround(
     // another; obstacles handle everything fixed.
     const desired = Math.max(b.start, cursor);
     const at = firstFreeFrom(desired, duration, obstacles);
+    // Refuse the whole move rather than let one block spill into tomorrow. Partially
+    // applying a cascade would leave the day in a state the user never asked for and
+    // cannot see the shape of.
+    if (at + duration > DAY_END) {
+      return { blocks: others, movedIds: [], blockedBy: null, overflowed: b };
+    }
     if (at !== b.start) movedIds.push(b.id);
     out.push({ ...b, start: at, end: at + duration });
     cursor = at + duration;
   }
 
-  return { blocks: out, movedIds, blockedBy: null };
+  return { blocks: out, movedIds, blockedBy: null, overflowed: null };
 }
 
 /**
@@ -197,6 +226,16 @@ function spillPast(blocks: Block[], workingEnd: number): number {
   return latest - workingEnd;
 }
 
+/** Says which block the day ran out of room for, rather than just that it did. */
+function overflowMessage(b: Block): string {
+  return `Can\u2019t make room there \u2014 \u201c${b.title}\u201d would be pushed past midnight.`;
+}
+
+/** The inserted block itself does not fit before midnight. */
+function pastMidnightMessage(): string {
+  return 'That would run past midnight. Shorten it or move it earlier.';
+}
+
 /** Names the fixed block that prevented a move, and why it is fixed. */
 function blockedMessage(b: Block): string {
   const why = b.completed ? 'already done' : 'pinned';
@@ -251,6 +290,16 @@ export function reflowPlace(
     };
   }
 
+  if (start < 0 || end > DAY_END) {
+    return {
+      ok: false,
+      blocks,
+      message: pastMidnightMessage(),
+      movedIds: [],
+      spillMinutes: 0,
+    };
+  }
+
   const others = blocks.filter((b) => b.id !== id);
 
   // 1) Make room at the destination.
@@ -260,6 +309,15 @@ export function reflowPlace(
       ok: false,
       blocks,
       message: blockedMessage(pushed.blockedBy),
+      movedIds: [],
+      spillMinutes: 0,
+    };
+  }
+  if (pushed.overflowed) {
+    return {
+      ok: false,
+      blocks,
+      message: overflowMessage(pushed.overflowed),
       movedIds: [],
       spillMinutes: 0,
     };
@@ -292,7 +350,26 @@ export function reflowInsert(
   incoming: Block,
   workingEnd: number
 ): ReflowOutcome {
+  if (incoming.start < 0 || incoming.end > DAY_END) {
+    return {
+      ok: false,
+      blocks,
+      message: pastMidnightMessage(),
+      movedIds: [],
+      spillMinutes: 0,
+    };
+  }
+
   const pushed = placeAround(blocks, incoming.start, incoming.end);
+  if (pushed.overflowed) {
+    return {
+      ok: false,
+      blocks,
+      message: overflowMessage(pushed.overflowed),
+      movedIds: [],
+      spillMinutes: 0,
+    };
+  }
   if (pushed.blockedBy) {
     return {
       ok: false,

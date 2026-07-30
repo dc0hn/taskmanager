@@ -34,6 +34,16 @@ import PixelMeter from './pixel/PixelMeter';
 import StreakPanel from './StreakPanel';
 import BadgeShelf from './BadgeShelf';
 import QuestBoard from './QuestBoard';
+import ChainBoard from './ChainBoard';
+import type { ChainStatus } from '../chains';
+import { seasonName, type SeasonRecord } from '../seasons';
+import {
+  commissionRecord,
+  openCommissions,
+  payoutFor,
+  stakedTotal,
+  type Commission,
+} from '../commissions';
 import CodexPanel from './CodexPanel';
 import ShopPanel from './ShopPanel';
 import type { Offer, ShopState } from '../shop';
@@ -72,6 +82,14 @@ interface Props {
   onReadInsight: (id: string) => void;
   insightWindowDays: number;
   quests: Quest[];
+  chains: ChainStatus[];
+  /** The season in progress, reckoned live. */
+  season: SeasonRecord;
+  sealedSeasons: SeasonRecord[];
+  /** How far through the season today is, 0..1. */
+  seasonFraction: number;
+  commissions: Commission[];
+  onOpenYearPage: () => void;
   daily: Challenge;
   weekly: Challenge;
   awards: AwardLedger;
@@ -112,6 +130,12 @@ export default function StandingView({
   onReadInsight,
   insightWindowDays,
   quests,
+  chains,
+  season,
+  sealedSeasons,
+  seasonFraction,
+  commissions,
+  onOpenYearPage,
   daily,
   weekly,
   awards,
@@ -362,6 +386,38 @@ export default function StandingView({
 
         <div className="rule-h" />
 
+        {/*
+          The season, and the year it belongs to.
+
+          Placed above chains rather than below because it is the widest horizon on the
+          screen and reads as the frame the rest sits inside.
+        */}
+        <Foldable
+          id="season"
+          title={seasonName(season.season)}
+          summary={`${Math.round(seasonFraction * 100)}% elapsed · ${season.daysKept} days kept`}
+        >
+          <SeasonPanel
+            season={season}
+            sealed={sealedSeasons}
+            fraction={seasonFraction}
+            onOpenYearPage={onOpenYearPage}
+          />
+        </Foldable>
+
+        <div className="rule-h" />
+
+        {/* Between the weekly board and the hundred-day run, which had nothing in it. */}
+        <Foldable
+          id="chains"
+          title="Chains"
+          summary={`${chains.filter((c) => c.finished).length} of ${chains.length} complete`}
+        >
+          <ChainBoard statuses={chains} />
+        </Foldable>
+
+        <div className="rule-h" />
+
         <Foldable
           id="shelf"
           title="The shelf"
@@ -395,6 +451,7 @@ export default function StandingView({
           title="The shop"
           summary={`${progress.brass.toLocaleString()} brass · ${shopOffers.filter((o) => o.canBuy).length} of ${CATALOGUE.length} affordable`}
         >
+          <CommissionPanel commissions={commissions} />
           <ShopPanel
             offers={shopOffers}
             shop={shop}
@@ -607,5 +664,131 @@ function ResetRow({ onReset }: { onReset: () => void }) {
         )}
       </div>
     </section>
+  );
+}
+
+
+/**
+ * The season, its sealed predecessors, and the way out to the year page.
+ *
+ * A season is not a target and deliberately has no meter of "how well you are doing" — the
+ * elapsed bar measures TIME, not performance, because the one thing a quarter-length frame
+ * should not do is make three weeks in feel like failure.
+ */
+function SeasonPanel({
+  season,
+  sealed,
+  fraction,
+  onOpenYearPage,
+}: {
+  season: SeasonRecord;
+  sealed: SeasonRecord[];
+  fraction: number;
+  onOpenYearPage: () => void;
+}) {
+  const hours = (m: number) => Math.round(m / 60).toLocaleString();
+
+  return (
+    <div>
+      <p className="text-body-sm text-bone-3 mb-3 max-w-[64ch] leading-relaxed">
+        A quarter of the year, sealed when it ends. Sealing records what was true and changes
+        nothing else — your standing, your run and your brass all carry straight over.
+      </p>
+
+      <div className="mb-1">
+        <PixelMeter value={fraction} segments={26} height={7} gap={1} cursor={false} title={`${Math.round(fraction * 100)}% of the season elapsed`} />
+      </div>
+      <div className="font-mono text-nano tnum text-bone-4 mb-4">
+        {season.from} → {season.to} · {Math.round(fraction * 100)}% elapsed
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-4 mb-4">
+        {[
+          { label: 'DAYS KEPT', value: season.daysKept.toLocaleString() },
+          { label: 'CLEARED', value: season.daysCleared.toLocaleString() },
+          { label: 'BEST RUN', value: season.bestRun.toLocaleString() },
+          { label: 'HOURS DEEP', value: hours(season.focusMinutes) },
+        ].map((f) => (
+          <div key={f.label}>
+            <div className="font-mono tnum" style={{ fontSize: 19, color: 'var(--bone-0)' }}>
+              {f.value}
+            </div>
+            <div className="font-mono text-nano text-bone-4 tracking-wide">{f.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {sealed.length > 0 && (
+        <div className="mb-4">
+          <div className="legend mb-1.5">Sealed</div>
+          <div className="grid gap-1">
+            {sealed.map((s) => (
+              <div
+                key={s.season}
+                className="flex items-baseline justify-between gap-3 px-2.5 py-1.5"
+                style={{ background: 'var(--chassis-1)', border: '1px solid var(--rule-1)' }}
+              >
+                <span className="font-mono text-nano text-bone-2">{seasonName(s.season)}</span>
+                <span className="font-mono text-nano tnum text-bone-3">
+                  {s.rank} · {s.daysKept} kept · {hours(s.focusMinutes)}h deep
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button onClick={onOpenYearPage} className="btn-quiet text-body-sm px-3 h-8">
+        Open the year page
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Brass currently at risk.
+ *
+ * Read-only on purpose. A commission is placed against a specific block on a specific day,
+ * so it is placed where that block is — in the edit modal — rather than from a list here,
+ * which would need its own block picker and would let you stake on something you were not
+ * looking at.
+ */
+function CommissionPanel({ commissions }: { commissions: Commission[] }) {
+  const open = openCommissions(commissions);
+  const record = commissionRecord(commissions);
+  if (open.length === 0 && record.kept === 0 && record.forfeited === 0) return null;
+
+  return (
+    <div
+      className="px-3 py-2.5 mb-1"
+      style={{ background: 'var(--chassis-2)', border: '1px solid var(--rule-2)' }}
+    >
+      <div className="flex items-baseline justify-between gap-3 flex-wrap mb-2">
+        <span className="legend">Commissioned</span>
+        <span className="font-mono text-nano tnum text-bone-3">
+          {stakedTotal(commissions).toLocaleString()} at risk · {record.kept} kept,{' '}
+          {record.forfeited} lapsed · net {record.net >= 0 ? '+' : ''}
+          {record.net.toLocaleString()}
+        </span>
+      </div>
+      {open.length === 0 ? (
+        <div className="font-mono text-nano text-bone-4">
+          Nothing staked. Open a future entry to promise one.
+        </div>
+      ) : (
+        <div className="grid gap-1">
+          {open.map((c) => (
+            <div key={c.id} className="flex items-baseline justify-between gap-3">
+              <span className="font-mono text-nano text-bone-2 truncate">
+                {c.date} · {c.title}
+              </span>
+              <span className="font-mono text-nano tnum shrink-0" style={{ color: 'var(--signal)' }}>
+                {c.stake.toLocaleString()} → {payoutFor(c.stake).toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

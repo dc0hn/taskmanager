@@ -482,6 +482,68 @@ export function insightById(id: string): InsightRule | undefined {
   return INSIGHTS.find((i) => i.id === id);
 }
 
+
+// ---------------------------------------------------------------------------
+// Feeding the findings back
+// ---------------------------------------------------------------------------
+
+/** The day, cut into four windows. The same four the peak-window card reports on. */
+export const DAY_WINDOWS: { label: string; from: number; to: number }[] = [
+  { label: 'Before 9am', from: 0, to: 540 },
+  { label: '9am – noon', from: 540, to: 720 },
+  { label: 'Noon – 5pm', from: 720, to: 1020 },
+  { label: 'After 5pm', from: 1020, to: 24 * 60 },
+];
+
+/** Completions a category needs in a window before the window is worth believing. */
+export const WINDOW_MIN_SAMPLES = 6;
+
+/**
+ * The window each category historically finishes most of its work in.
+ *
+ * The one place a finding is fed back into behaviour rather than just reported. Everything
+ * else in the codex tells you something; this changes where the scheduler puts things.
+ *
+ * Two guards, both load-bearing:
+ *
+ *   ENOUGH SAMPLES, PER CATEGORY. A category with four completions has no pattern, it has
+ *   four data points. Below `WINDOW_MIN_SAMPLES` it gets no preference at all, which is
+ *   why this returns a sparse map rather than a window for everything.
+ *
+ *   A CLEAR WINNER. If the best window holds no more than the second best, there is
+ *   nothing to prefer and pretending otherwise would move work on a coin flip.
+ *
+ * Counts completions rather than rates because the question is "when does this actually
+ * get finished", and an hour with one planned block finished is not evidence about the
+ * hour — it is evidence about the block.
+ */
+export function strongestWindows(
+  ctx: InsightContext
+): Record<string, { from: number; to: number }> {
+  const byCategory = new Map<string, number[]>();
+  for (const e of stamped(ctx)) {
+    const at = e.block.completedAt!;
+    const idx = DAY_WINDOWS.findIndex((w) => at >= w.from && at < w.to);
+    if (idx < 0) continue;
+    const counts = byCategory.get(e.block.category) ?? DAY_WINDOWS.map(() => 0);
+    counts[idx] += 1;
+    byCategory.set(e.block.category, counts);
+  }
+
+  const out: Record<string, { from: number; to: number }> = {};
+  for (const [category, counts] of byCategory) {
+    const total = counts.reduce((a, b) => a + b, 0);
+    if (total < WINDOW_MIN_SAMPLES) continue;
+    const ranked = counts
+      .map((n, i) => ({ n, i }))
+      .sort((a, b) => b.n - a.n);
+    if (ranked[0].n <= (ranked[1]?.n ?? 0)) continue;
+    const w = DAY_WINDOWS[ranked[0].i];
+    out[category] = { from: w.from, to: w.to };
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Ledger keys
 // ---------------------------------------------------------------------------

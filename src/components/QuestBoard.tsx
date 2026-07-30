@@ -219,18 +219,18 @@ function ChallengeTile({
 
 /** The moment a set closes. Queued, for the same reason badges are. */
 export const QuestDoneToast = memo(function QuestDoneToast({
-  queue,
-  onDone,
+  quest,
+  remaining,
 }: {
-  queue: { name: string; xp: number }[];
-  onDone: () => void;
+  quest: { name: string; xp: number } | null;
+  remaining: number;
 }) {
   const reduced = useReducedMotion();
-  const current = queue[0] ?? null;
+  const current = quest;
 
   return (
     <div className="fixed right-6 bottom-24 z-[62] pointer-events-none">
-      <AnimatePresence onExitComplete={onDone}>
+      <AnimatePresence>
         {current && (
           <motion.div
             key={current.name}
@@ -253,7 +253,7 @@ export const QuestDoneToast = memo(function QuestDoneToast({
                 style={{ fontSize: 9.5, letterSpacing: '0.14em', color: 'var(--signal)' }}
               >
                 SET FINISHED
-                {queue.length > 1 && ` · ${queue.length - 1} MORE`}
+                {remaining > 0 && ` · ${remaining} MORE`}
               </div>
               <div
                 className="font-display"

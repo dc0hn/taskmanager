@@ -4,6 +4,7 @@ import { DEFAULT_CATEGORIES } from './types';
 import type { Block, DailyStat, DayPlan } from './types';
 import { buildInsightContext, insightStatuses } from './insights';
 import { emptyAwards } from './streaks';
+import { invalidatePlanDates, listPlanDates, loadPlans, savePlan } from './storage';
 
 // Throwaway measurement harness for the technical audit. Not a behavioural test —
 // it exists to put real numbers against the "recompute janks the UI" findings.
@@ -94,5 +95,97 @@ describe('audit: hot-path cost', () => {
     );
     expect(buildMs).toBeLessThan(16);
     expect(statusMs).toBeLessThan(16);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/** In-memory stand-in, same shape the storage suites use. */
+class MemoryStorage {
+  private map = new Map<string, string>();
+  get length(): number {
+    return this.map.size;
+  }
+  key(i: number): string | null {
+    return [...this.map.keys()][i] ?? null;
+  }
+  getItem(k: string): string | null {
+    return this.map.has(k) ? this.map.get(k)! : null;
+  }
+  setItem(k: string, v: string): void {
+    this.map.set(k, String(v));
+  }
+  removeItem(k: string): void {
+    this.map.delete(k);
+  }
+  clear(): void {
+    this.map.clear();
+  }
+}
+
+describe('audit: load-path cost', () => {
+  it('reads and parses the codex window inside a frame', () => {
+    // The gap the other two tests leave: they build blocks in memory, so the storage
+    // path — getItem plus JSON.parse per day, plus a full key enumeration — was never
+    // measured. This is the one place the app does ninety of those at once.
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    invalidatePlanDates();
+
+    // Three years of history, so the key enumeration has something to walk.
+    const ALL_DAYS = 1095;
+    for (let i = 0; i < ALL_DAYS; i++) {
+      const date = shiftKey('2026-07-30', i - (ALL_DAYS - 1));
+      savePlan({ date, tasks: [], blocks: makeDay(date, 8) });
+    }
+
+    const window90 = Array.from({ length: 90 }, (_, i) => shiftKey('2026-07-30', i - 89));
+
+    // Cold: the enumeration is unavoidable once.
+    invalidatePlanDates();
+    const t0 = performance.now();
+    const stored = new Set(listPlanDates());
+    const wanted = window90.filter((d) => stored.has(d));
+    const plans = loadPlans(wanted);
+    const coldMs = performance.now() - t0;
+    expect(Object.keys(plans)).toHaveLength(90);
+
+    // Warm: what it costs on a repeat, with the date list cached.
+    const t1 = performance.now();
+    for (let i = 0; i < 5; i++) {
+      const s2 = new Set(listPlanDates());
+      loadPlans(window90.filter((d) => s2.has(d)));
+    }
+    const warmMs = (performance.now() - t1) / 5;
+
+    console.log(
+      `load 90d of 1095 stored — cold ${coldMs.toFixed(2)}ms, warm ${warmMs.toFixed(2)}ms`
+    );
+    expect(coldMs).toBeLessThan(100);
+    expect(warmMs).toBeLessThan(100);
+  });
+
+  it('does not re-enumerate the store once the date list is cached', () => {
+    // The cache is the fix for listPlanDates being an O(all keys) walk behind a memo that
+    // recomputed on every plans change. Measured rather than asserted structurally.
+    (globalThis as { localStorage?: unknown }).localStorage = new MemoryStorage();
+    invalidatePlanDates();
+    for (let i = 0; i < 1095; i++) {
+      const date = shiftKey('2026-07-30', i - 1094);
+      savePlan({ date, tasks: [], blocks: [] });
+    }
+
+    invalidatePlanDates();
+    const t0 = performance.now();
+    listPlanDates();
+    const firstMs = performance.now() - t0;
+
+    const t1 = performance.now();
+    for (let i = 0; i < 200; i++) listPlanDates();
+    const cachedMs = (performance.now() - t1) / 200;
+
+    console.log(
+      `listPlanDates over 1095 keys — first ${firstMs.toFixed(3)}ms, cached ${cachedMs.toFixed(4)}ms`
+    );
+    expect(cachedMs).toBeLessThan(firstMs);
   });
 });

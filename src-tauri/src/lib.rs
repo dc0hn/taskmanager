@@ -1,3 +1,4 @@
+use std::io::Write;
 use tauri::Manager;
 
 /// Write a snapshot of the whole profile to a fixed path in the app data directory.
@@ -7,12 +8,18 @@ use tauri::Manager;
 /// pointed somewhere it should not go, and no need for a broad filesystem grant to cover
 /// the one file the app actually writes.
 ///
-/// Durability comes from write-then-rename: `rename` within a directory is atomic on
-/// every platform this ships to, so the snapshot on disk is either the previous complete
-/// one or the new complete one, never half of either. One generation is kept behind the
-/// current file, because the failure that matters is not a torn write but a snapshot
-/// taken of state that had already gone wrong — and overwriting the last good copy with
-/// it is exactly the loss a snapshot exists to prevent.
+/// Durability comes from fsync-then-rename, in that order, and the order is the point.
+/// `rename` alone buys atomic VISIBILITY — a reader sees the old file or the new one,
+/// never half of either — but not durability against power loss: the rename can be
+/// journalled while the temp file's data blocks are still sitting in the page cache,
+/// which after a hard crash leaves a snapshot that is present, correctly named, and
+/// empty. Syncing the file before the rename, and the directory after it, is what makes
+/// the file's contents and its name both survive.
+///
+/// One generation is kept behind the current file, because the failure that matters is
+/// not a torn write but a snapshot taken of state that had already gone wrong — and
+/// overwriting the last good copy with it is exactly the loss a snapshot exists to
+/// prevent.
 #[tauri::command]
 fn write_snapshot(app: tauri::AppHandle, contents: String) -> Result<String, String> {
     // A profile is JSON of plans and counters. Tens of megabytes means something has
@@ -45,7 +52,15 @@ fn write_rotating(dir: &std::path::Path, contents: &str) -> Result<std::path::Pa
     let previous = dir.join("almanac-snapshot.prev.json");
     let temp = dir.join("almanac-snapshot.json.tmp");
 
-    std::fs::write(&temp, contents.as_bytes()).map_err(|e| format!("write failed: {e}"))?;
+    {
+        let mut f =
+            std::fs::File::create(&temp).map_err(|e| format!("write failed: {e}"))?;
+        f.write_all(contents.as_bytes())
+            .map_err(|e| format!("write failed: {e}"))?;
+        // The data is on the platter before the name points at it. Without this the
+        // rename can land first and the contents never arrive.
+        f.sync_all().map_err(|e| format!("sync failed: {e}"))?;
+    }
 
     if current.exists() {
         // Best effort: losing the previous generation is not a reason to throw away a
@@ -53,6 +68,14 @@ fn write_rotating(dir: &std::path::Path, contents: &str) -> Result<std::path::Pa
         let _ = std::fs::rename(&current, &previous);
     }
     std::fs::rename(&temp, &current).map_err(|e| format!("rename failed: {e}"))?;
+
+    // And the rename itself. Directory metadata is cached like anything else, so without
+    // this the file can be durable under a name that did not survive. Best effort: some
+    // filesystems refuse to sync a directory handle, and failing the whole snapshot over
+    // that would be worse than the weaker guarantee.
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
 
     Ok(current)
 }
@@ -113,6 +136,33 @@ mod tests {
     }
 
     #[test]
+    fn the_written_file_reads_back_byte_for_byte() {
+        // The snapshot was write-only, so nothing had ever asserted it round-trips. A
+        // backup you cannot read is a backup in name.
+        let s = Scratch::new("roundtrip");
+        let json = r#"{"format":"almanac.export","records":{"dp:plan:2026-07-30":{}}}"#;
+        let path = write_rotating(&s.0, json).expect("write");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
+    }
+
+    #[test]
+    fn both_generations_are_readable_after_two_writes() {
+        // The reason to keep a generation is to restore from it, which means it has to be
+        // readable and it has to be the older one.
+        let s = Scratch::new("generations");
+        write_rotating(&s.0, "older").expect("first");
+        write_rotating(&s.0, "newer").expect("second");
+        assert_eq!(
+            std::fs::read_to_string(s.0.join("almanac-snapshot.json")).unwrap(),
+            "newer"
+        );
+        assert_eq!(
+            std::fs::read_to_string(s.0.join("almanac-snapshot.prev.json")).unwrap(),
+            "older"
+        );
+    }
+
+    #[test]
     fn overwrites_rather_than_appending() {
         let s = Scratch::new("truncates");
         write_rotating(&s.0, "a-long-first-snapshot").expect("first");
@@ -122,6 +172,38 @@ mod tests {
             "short"
         );
     }
+}
+
+
+/// Read the snapshot back, so the second copy is usable from inside the app.
+///
+/// The snapshot was write-only, which made it a backup in name. Restoring meant quitting,
+/// finding the file in Finder, opening it in an editor, copying the whole thing and
+/// pasting it into the import box — at exactly the moment someone is least equipped to go
+/// path-hunting. `importAll` already takes JSON text and already validates every record,
+/// so this is the only piece that was missing.
+///
+/// `previous` selects the generation kept behind the current file, which is what you want
+/// when the current one turns out to be a snapshot of already-broken state.
+///
+/// Same shape as the writer: no path argument. The frontend asks for "the snapshot" or
+/// "the one before it" and gets text back.
+#[tauri::command]
+fn read_snapshot(app: tauri::AppHandle, previous: bool) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data directory: {e}"))?;
+    let name = if previous {
+        "almanac-snapshot.prev.json"
+    } else {
+        "almanac-snapshot.json"
+    };
+    let path = dir.join(name);
+    if !path.exists() {
+        return Err(format!("no snapshot at {}", path.display()));
+    }
+    std::fs::read_to_string(&path).map_err(|e| format!("could not read {}: {e}", path.display()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -137,7 +219,7 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![write_snapshot])
+    .invoke_handler(tauri::generate_handler![write_snapshot, read_snapshot])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

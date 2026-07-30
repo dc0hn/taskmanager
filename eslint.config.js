@@ -43,15 +43,13 @@ export default defineConfig([
     //   time IS a sequence of state changes on a timer. Framer would remove the need, and
     //   if these ever move onto motion values the exception should shrink to match.
     //
-    //   FORM RESET ON OPEN (BackupModal, DayMarkImport, EditBlockModal). The genuinely
-    //   fixable ones: a `key` on each modal would remount it and drop the effects
-    //   entirely. Left as-is because it changes three call sites for no behavioural gain,
-    //   and it is the honest first thing to do if this list is ever revisited.
+    //   FORM RESET ON OPEN — FIXED, and no longer listed. BackupModal, DayMarkImport and
+    //   EditBlockModal each reset their fields in an effect. App now gives all three a
+    //   `key` that changes when they open, so they remount with the right values instead of
+    //   rendering stale ones for a frame first. The rule was right about those; they are off
+    //   this list because the code changed, not because the exception grew.
     files: [
       'src/App.tsx',
-      'src/components/BackupModal.tsx',
-      'src/components/DayMarkImport.tsx',
-      'src/components/EditBlockModal.tsx',
       'src/components/ProgressWheel.tsx',
       'src/components/pixel/PixelMeter.tsx',
     ],
