@@ -545,10 +545,50 @@ function BlockCard({
   const [hovered, setHovered] = useState(false);
   const reduced = useReducedMotion() ?? false;
 
-  // Content tiers by rendered height. A 15-minute block cannot show three lines,
-  // so it shows one and drops the rest rather than clipping them.
-  const tier: 'tiny' | 'compact' | 'full' =
-    height < 30 ? 'tiny' : height < 52 || density === 'compact' ? 'compact' : 'full';
+  /*
+   * Content tiers by rendered height, in px. At 1.35px per minute a five-minute
+   * entry is under 7px tall — there is no font size at which a title is legible
+   * in that, so below `micro` nothing is drawn inside at all and the label moves
+   * to a hover chip instead. Cramming clipped text into a 7px box was the
+   * illegibility.
+   *
+   *   micro    < 13px  (≲9 min)   bar only; label on hover
+   *   tiny     < 30px  (≲22 min)  title only, no time
+   *   compact  < 54px  (≲40 min)  title + start
+   *   full               legend + title + time range
+   *
+   * The micro cut-off is deliberately low. A first pass put it at 22px, which
+   * silently stripped the label off ten- and fifteen-minute entries — common
+   * durations that can carry a small one perfectly well — and left a stack of
+   * anonymous bars. Only a five-minute entry is genuinely too short for type.
+   */
+  const tier: 'micro' | 'tiny' | 'compact' | 'full' =
+    height < 13
+      ? 'micro'
+      : height < 30
+        ? 'tiny'
+        : height < 54 || density === 'compact'
+          ? 'compact'
+          : 'full';
+
+  /** 15 min is 20px: a 10px face fits, an 11.5px one does not. */
+  const tinyFontPx = height < 18 ? 9.5 : 10.5;
+
+  /*
+   * Controls are sized to the block and never allowed to exceed it. The cluster
+   * lives outside the surface's clip so short blocks don't slice their own
+   * checkbox in half — but that also means a fixed 20px cluster on a 7px block
+   * overhangs the entries above and below it, which is the overlap. Clamping the
+   * box to the available height fixes it at the source.
+   */
+  const controlBox = Math.max(11, Math.min(20, height - 4));
+  const controlIcon = controlBox <= 14 ? 8 : 11;
+  // Progressive disclosure: a short entry earns only its checkbox. Pin and edit
+  // appear once there is genuinely room for them.
+  const showPin = !block.auto && height >= 34;
+  const showEdit = !block.auto && height >= 46;
+
+  const fullLabel = `${block.title} · ${format12h(start)} – ${format12h(end)}`;
 
   return (
     <motion.div
@@ -588,6 +628,7 @@ function BlockCard({
         // is reachable and never sits behind the section before or after it.
         zIndex: dragging ? 40 : hovered ? 20 : 2,
       }}
+      title={fullLabel}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onPointerDown={(e) => onPointerDown(e, 'move')}
@@ -635,12 +676,31 @@ function BlockCard({
           </>
         )}
 
-        {tier === 'tiny' ? (
-          <div className="absolute inset-0 flex items-center gap-1.5 px-2 pr-7">
+        {/* micro — no type. A title in 7px of height is a sliver of a glyph, not
+            information, and cramming one in was the illegibility. Instead the bar
+            gets a marker dot at its head so it reads as a deliberate mark rather
+            than a broken entry, and the label arrives on hover. */}
+        {tier === 'micro' ? (
+          <div className="absolute inset-0 flex items-center pl-1.5">
             <span
-              className="text-[11.5px] font-semibold truncate"
+              className="rounded-full shrink-0"
               style={{
-                // --fg-3 rather than --fg-4: a completed block should recede,
+                width: 3,
+                height: 3,
+                background: done ? 'var(--bone-4)' : c.accent,
+              }}
+            />
+          </div>
+        ) : tier === 'tiny' ? (
+          <div
+            className="absolute inset-0 flex items-center px-2"
+            style={{ paddingRight: controlBox + 6 }}
+          >
+            <span
+              className="font-semibold truncate leading-none"
+              style={{
+                fontSize: tinyFontPx,
+                // --bone-3 rather than --bone-4: a completed block should recede,
                 // but its title still has to be readable at a glance.
                 color: done ? 'var(--bone-3)' : c.text,
                 textDecoration: done ? 'line-through' : undefined,
@@ -648,15 +708,12 @@ function BlockCard({
             >
               {block.title}
             </span>
-            <span
-              className="font-mono text-[9.5px] tnum shrink-0"
-              style={{ color: done ? 'var(--bone-3)' : c.textDim }}
-            >
-              {format12h(start)}
-            </span>
           </div>
         ) : (
-          <div className="h-full px-2.5 pt-1.5 pb-1 flex flex-col overflow-hidden pr-7">
+          <div
+            className="h-full px-2.5 pt-1.5 pb-1 flex flex-col overflow-hidden"
+            style={{ paddingRight: controlBox + 8 }}
+          >
             {tier === 'full' && (
               <span
                 className="smallcaps text-[9.5px] mb-0.5 shrink-0"
@@ -689,6 +746,35 @@ function BlockCard({
         )}
       </div>
 
+      {/* A micro entry's label, on hover. Raised above its neighbours and allowed
+          to be taller than the entry itself, because it behaves as a tooltip
+          rather than as part of the grid. This is how a five-minute entry stays
+          identifiable without pretending text fits inside it. */}
+      {tier === 'micro' && hovered && !dragging && (
+        <div
+          className="absolute left-0 flex items-center gap-1.5 px-2 h-[20px] rounded-xs pointer-events-none whitespace-nowrap"
+          style={{
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 30,
+            background: 'var(--chassis-4)',
+            border: `1px solid ${c.line}`,
+            boxShadow: '0 6px 18px -8px rgba(0,0,0,0.85)',
+          }}
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ background: c.accent }}
+          />
+          <span className="text-nano font-semibold" style={{ color: c.text }}>
+            {block.title}
+          </span>
+          <span className="font-mono text-nano tnum" style={{ color: 'var(--bone-3)' }}>
+            {format12h(start)} – {format12h(end)}
+          </span>
+        </div>
+      )}
+
       {/* Action cluster — a SIBLING of the clipped surface, not a child.
           Centred on the block's own vertical midpoint rather than pinned to its
           top edge, so the controls always sit in the middle of the section they
@@ -696,8 +782,13 @@ function BlockCard({
           with the entry above, and now that reflow packs entries back to back
           that boundary is where most blocks meet their neighbour.
           Living outside the surface's overflow-hidden is what stops a 15-minute
-          entry clipping its own checkbox in half. */}
-      <div className="absolute top-1/2 -translate-y-1/2 right-1 flex items-center gap-0.5 z-20">
+          entry clipping its own checkbox in half — but it also means a fixed-size
+          cluster would overhang a very short entry onto its neighbours, so every
+          control is sized from `controlBox`, which is clamped to the block. */}
+      <div
+        className="absolute top-1/2 -translate-y-1/2 right-1 flex items-center gap-0.5 z-20"
+        style={{ maxHeight: height }}
+      >
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
@@ -705,23 +796,33 @@ function BlockCard({
               onToggle();
             }}
             aria-label={done ? 'Mark as not done' : 'Mark as done'}
-            className="grid place-items-center w-5 h-5 rounded-md transition-transform active:scale-90"
+            className="grid place-items-center rounded-xs transition-transform active:scale-90"
+            style={{ width: controlBox, height: controlBox }}
           >
             <span
-              className="grid place-items-center w-[15px] h-[15px] rounded"
+              className="grid place-items-center rounded-xs"
               style={{
+                width: controlBox - 4,
+                height: controlBox - 4,
                 background: done ? c.accent : 'rgba(245, 242, 236,0.06)',
                 boxShadow: done
                   ? `inset 0 0 0 1px ${c.accent}`
                   : 'inset 0 0 0 1.5px rgba(245, 242, 236,0.28)',
               }}
             >
-              {done && <Check size={10} strokeWidth={3.2} className="text-paper-0" />}
+              {done && (
+                <Check
+                  size={controlIcon}
+                  strokeWidth={3.2}
+                  className="text-chassis-0"
+                />
+              )}
             </span>
           </button>
           {/* Pin. Stays visible while pinned, since it changes how every later
-              rearrangement behaves and that shouldn't be hidden behind a hover. */}
-          {!block.auto && (
+              rearrangement behaves and that shouldn't be hidden behind a hover.
+              Only offered once the entry is tall enough to hold it. */}
+          {showPin && (
             <button
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -735,21 +836,25 @@ function BlockCard({
                   ? 'Pinned — rearranging other entries will not move this'
                   : 'Pin in place'
               }
-              className={`grid place-items-center w-5 h-5 rounded-md transition-opacity ${
+              className={`grid place-items-center rounded-xs transition-opacity ${
                 pinned
                   ? 'opacity-100'
                   : 'text-bone-3 hover:text-bone-0 opacity-0 group-hover:opacity-100'
               }`}
-              style={pinned ? { color: 'var(--signal)' } : undefined}
+              style={{
+                width: controlBox,
+                height: controlBox,
+                ...(pinned ? { color: 'var(--signal)' } : {}),
+              }}
             >
               {pinned ? (
-                <Pin size={11} strokeWidth={2.4} />
+                <Pin size={controlIcon} strokeWidth={2.4} />
               ) : (
-                <PinOff size={11} strokeWidth={1.8} />
+                <PinOff size={controlIcon} strokeWidth={1.8} />
               )}
             </button>
           )}
-          {!block.auto && (
+          {showEdit && (
             <button
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -757,9 +862,10 @@ function BlockCard({
                 onEdit();
               }}
               aria-label="Edit block"
-              className="grid place-items-center w-5 h-5 rounded-md text-bone-3 hover:text-bone-0 opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ width: controlBox, height: controlBox }}
+              className="grid place-items-center rounded-xs text-bone-3 hover:text-bone-0 opacity-0 group-hover:opacity-100 transition-opacity"
             >
-              <Pencil size={11} strokeWidth={1.8} />
+              <Pencil size={controlIcon} strokeWidth={1.8} />
             </button>
           )}
       </div>
