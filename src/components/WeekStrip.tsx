@@ -1,5 +1,6 @@
 import { memo } from 'react';
-import type { DayPlan } from '../types';
+import type { DayMarkDef, DayMarks, DayPlan } from '../types';
+import { markById } from '../daymarks';
 import { formatDuration, fromDateKey, toDateKey } from '../utils/time';
 import { weekDates } from '../week';
 
@@ -18,9 +19,19 @@ interface Props {
   onSelectDay: (date: string) => void;
   /** Matches TimeGrid's axis gutter so headers line up with their columns. */
   axisWidth: number;
+  marks: DayMarks;
+  markDefs: DayMarkDef[];
 }
 
-function WeekStrip({ weekKey, plans, selected, onSelectDay, axisWidth }: Props) {
+function WeekStrip({
+  weekKey,
+  plans,
+  selected,
+  onSelectDay,
+  axisWidth,
+  marks,
+  markDefs,
+}: Props) {
   const today = toDateKey(new Date());
   const dates = weekDates(weekKey);
 
@@ -38,6 +49,7 @@ function WeekStrip({ weekKey, plans, selected, onSelectDay, axisWidth }: Props) 
           .filter((b) => b.completed)
           .reduce((sum, b) => sum + (b.end - b.start), 0);
         const pct = minutes > 0 ? (doneMinutes / minutes) * 100 : 0;
+        const mark = markById(markDefs, marks[date]);
 
         return (
           <button
@@ -53,6 +65,16 @@ function WeekStrip({ weekKey, plans, selected, onSelectDay, axisWidth }: Props) 
                   : undefined,
             }}
           >
+            {/* A cap rather than a wash: the column below belongs to the grid, so
+                the mark claims only the header. */}
+            {mark && (
+              <span
+                aria-hidden
+                className="absolute left-0 right-0 top-0 pointer-events-none"
+                style={{ height: 2, background: mark.color }}
+              />
+            )}
+
             <div className="flex items-baseline gap-1.5">
               <span
                 className="font-mono text-nano tracking-widest uppercase"
@@ -60,6 +82,15 @@ function WeekStrip({ weekKey, plans, selected, onSelectDay, axisWidth }: Props) 
               >
                 {d.toLocaleDateString(undefined, { weekday: 'short' })}
               </span>
+              {mark && (
+                <span
+                  className="font-mono text-nano tracking-widest uppercase truncate"
+                  style={{ color: mark.color }}
+                  title={mark.label}
+                >
+                  {mark.label}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span

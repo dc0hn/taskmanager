@@ -19,11 +19,19 @@ import type {
   Block,
   CarryoverItem,
   CategoryDef,
+  DailyStat,
+  DayMarkDef,
+  DayMarks,
   DayPlan,
   HabitStore,
   RecurringTask,
   Settings,
+  AwardLedger,
+  BadgeDef,
+  DisciplineId,
+  StreakState,
   Task,
+  UserProgress,
   ViewMode,
   WeeklyGoal,
   WeekRecord,
@@ -32,6 +40,8 @@ import {
   listPlanDates,
   loadCarryover,
   loadCategories,
+  loadDayMarkDefs,
+  loadDayMarks,
   loadHabits,
   loadPlan,
   loadPlans,
@@ -43,14 +53,127 @@ import {
   saveMonth,
   saveCarryover,
   saveCategories,
+  loadAwards,
+  loadDayStats,
+  loadShop,
+  loadProgress,
+  loadStreak,
+  saveDayMarkDefs,
+  saveDayMarks,
+  saveAwards,
+  saveDayStats,
+  saveShop,
+  saveProgress,
+  saveStreak,
   saveHabits,
   saveSettings,
   saveWeek,
 } from './storage';
+import DayMarkImport from './components/DayMarkImport';
+import {
+  applyProposal,
+  countMarksInMonth,
+  cycleMark,
+  describeMarks,
+  markById,
+  monthsWithMarks,
+  setMark,
+} from './daymarks';
 import { buildSchedule, rulesFor } from './scheduler';
+import StandingView from './components/StandingView';
+import { BadgeUnlockToast } from './components/BadgeShelf';
+import { QuestDoneToast } from './components/QuestBoard';
+import { CodexUnlockToast } from './components/CodexPanel';
+import {
+  boostFor,
+  equip as equipItem,
+  freezeCapacity,
+  hasExtraWildcard,
+  itemById,
+  offersFor,
+  purchase,
+  spendRefill,
+  unequip as unequipSlot,
+  type ShopState,
+} from './shop';
+import {
+  buildInsightContext,
+  insightById,
+  insightStatuses,
+  isRead,
+  readKey,
+  unlocksDue,
+} from './insights';
+import {
+  buildWeekContext,
+  dailyChallenge,
+  questPayout,
+  questsFor,
+  weeklyChallenge,
+} from './quests';
+import {
+  mergeDisciplines,
+  planAheadDue,
+  reviewAwardsDue,
+} from './bonuses';
+import {
+  badgeById,
+  badgeContext,
+  badgeIdFromKey,
+  badgeStatuses,
+  evaluateBadges,
+  sealPriorBadges,
+} from './badges';
+import {
+  areaTotals,
+  emptyProgress,
+  LEVELS_PER_CYCLE,
+  RANKS,
+  levelsCrossed,
+  pruneStats,
+  comboRuns,
+  reckonDay,
+  xpForBlock,
+  reconcileDays,
+  standingFor,
+  withinRetention,
+  type Standing,
+} from './progress';
+import {
+  LevelTakeover,
+  LevelToast,
+  RunKeptToast,
+  RunTakeover,
+  XpFloat,
+  type FloatingXp,
+} from './components/pixel/XpToast';
+import {
+  biggestStreakMilestone,
+  deservesTakeover,
+  FREEZE_CAPACITY,
+  displayRun,
+  emptyAwards,
+  emptyStreak,
+  grantAwards,
+  resolveStreak,
+  routineAwardsDue,
+  todayQualifies,
+} from './streaks';
+import {
+  isSfxEnabled,
+  setSfxEnabled,
+  sfxComplete,
+  sfxCombo,
+  sfxDayCleared,
+  sfxLevel,
+  sfxMilestone,
+  sfxPrestige,
+  sfxSpend,
+} from './utils/sfx';
 import MonthsView from './components/MonthsView';
 import {
   currentMonthKey,
+  emptyMonthRecord,
   monthInProgress,
   resolveElapsedMonths,
 } from './month';
@@ -93,6 +216,29 @@ import {
   weekDates,
 } from './week';
 
+/**
+ * Minutes since midnight of `dayKey`, right now.
+ *
+ * Keeps counting past midnight: ticking a Monday block at 00:30 on Tuesday returns
+ * 1470, not 30. Without that, anything finished in the small hours would score as
+ * though it had been done before breakfast — and the punctuality bonus would be
+ * handed out for work that was hours late.
+ */
+function minutesSinceMidnightOf(dayKey: string): number {
+  const now = new Date();
+  const todayKey = toDateKey(now);
+  const wallMinutes = now.getHours() * 60 + now.getMinutes();
+  if (dayKey === todayKey) return wallMinutes;
+  const [y1, m1, d1] = dayKey.split('-').map(Number);
+  const [y2, m2, d2] = todayKey.split('-').map(Number);
+  const dayDiff = Math.round(
+    (Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000
+  );
+  // Ticking a *future* day's block clamps to its own end-of-day rather than going
+  // negative, which would read as absurdly early.
+  return dayDiff > 0 ? dayDiff * 1440 + wallMinutes : wallMinutes;
+}
+
 const AXIS_W = 62; // must match TimeGrid's gutter so the week strip lines up
 const SAVE_DEBOUNCE = 250;
 
@@ -113,6 +259,13 @@ export default function App() {
   const [carryover, setCarryover] = useState<CarryoverItem[]>(loadCarryover);
   const [habits, setHabits] = useState<HabitStore>(loadHabits);
   const [week, setWeek] = useState<WeekRecord>(() => loadWeek(currentWeekKey()));
+  const [markDefs, setMarkDefs] = useState<DayMarkDef[]>(loadDayMarkDefs);
+  const [dayMarks, setDayMarks] = useState<DayMarks>(loadDayMarks);
+  const [progress, setProgress] = useState<UserProgress>(loadProgress);
+  const [dayStats, setDayStats] = useState<Record<string, DailyStat>>(loadDayStats);
+  const [streak, setStreak] = useState<StreakState>(loadStreak);
+  const [awards, setAwards] = useState<AwardLedger>(loadAwards);
+  const [shop, setShop] = useState<ShopState>(loadShop);
 
   const [overflow, setOverflow] = useState<Task[]>([]);
   const [overflowReasons, setOverflowReasons] = useState<Record<string, string>>({});
@@ -120,10 +273,66 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [hoursOpen, setHoursOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
+  const [marksOpen, setMarksOpen] = useState(false);
   const [buildPulse, setBuildPulse] = useState(0);
+
+  // Reward presentation. Three queues rather than one flag, because a single
+  // generous day can cross several levels and each deserves its own moment.
+  const [xpFloat, setXpFloat] = useState<FloatingXp | null>(null);
+  const [levelToast, setLevelToast] = useState<Standing | null>(null);
+  const [takeover, setTakeover] = useState<{ standing: Standing; prestige: boolean } | null>(null);
+  const [sfxOn, setSfxOn] = useState(false);
+  const [runKept, setRunKept] = useState<{ run: number; seed: number } | null>(null);
+  const [runTakeover, setRunTakeover] = useState<number | null>(null);
+  const [questQueue, setQuestQueue] = useState<{ name: string; xp: number }[]>([]);
+  const [codexQueue, setCodexQueue] = useState<{ name: string; glyph: string; xp: number }[]>([]);
+  const [badgeQueue, setBadgeQueue] = useState<BadgeDef[]>([]);
+  /** Set on the day a comeback is paid, so the matching badge can see it. */
+  const comebackTodayRef = useRef(false);
 
   const rules = useMemo(() => rulesFor(categories), [categories]);
   const weekKey = useMemo(() => toWeekKey(date), [date]);
+
+  // Rewards clear themselves. Keyed on the award so a second completion inside the
+  // window restarts the clock rather than inheriting the first one's remaining time.
+  useEffect(() => {
+    if (!xpFloat) return;
+    const id = setTimeout(() => setXpFloat(null), 1000);
+    return () => clearTimeout(id);
+  }, [xpFloat]);
+
+  useEffect(() => {
+    if (!levelToast) return;
+    const id = setTimeout(() => setLevelToast(null), 3400);
+    return () => clearTimeout(id);
+  }, [levelToast]);
+
+  useEffect(() => {
+    if (!runKept) return;
+    const id = setTimeout(() => setRunKept(null), 2600);
+    return () => clearTimeout(id);
+  }, [runKept]);
+
+  // Badges show one at a time. Dropping the head after a beat lets the exit animation
+  // hand over to the next, so a day that trips four of them plays four moments rather
+  // than one card flickering between names.
+  useEffect(() => {
+    if (badgeQueue.length === 0) return;
+    const id = setTimeout(() => setBadgeQueue((q) => q.slice(1)), 2800);
+    return () => clearTimeout(id);
+  }, [badgeQueue]);
+
+  // The takeover is dismissed by clicking, but any key should also clear it — it
+  // covers the screen, so every plausible "get out of my way" gesture must work.
+  useEffect(() => {
+    if (!takeover && runTakeover == null) return;
+    const onKey = () => {
+      setTakeover(null);
+      setRunTakeover(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [takeover, runTakeover]);
 
   // -------------------------------------------------------------------------
   // Which days need to be in memory. The month grid is the widest case at 42.
@@ -192,6 +401,32 @@ export default function App() {
   useEffect(() => saveCategories(categories), [categories]);
   useEffect(() => saveCarryover(carryover), [carryover]);
   useEffect(() => saveHabits(habits), [habits]);
+  useEffect(() => saveDayMarkDefs(markDefs), [markDefs]);
+  useEffect(() => saveDayMarks(dayMarks), [dayMarks]);
+  useEffect(() => saveProgress(progress), [progress]);
+  useEffect(() => {
+    // The module owns the AudioContext, so the toggle has to reach it as well as
+    // localStorage — otherwise the switch flips and nothing changes.
+    setSfxEnabled(sfxOn);
+    try {
+      localStorage.setItem('dp:sfx:v1', sfxOn ? '1' : '0');
+    } catch {
+      // A refused write only costs the preference, never the session.
+    }
+  }, [sfxOn]);
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('dp:sfx:v1');
+      if (stored === '1') setSfxOn(true);
+    } catch {
+      // Ships silent, which is the safe default anyway.
+    }
+    setSfxOn((v) => (isSfxEnabled() ? true : v));
+  }, []);
+  useEffect(() => saveDayStats(dayStats), [dayStats]);
+  useEffect(() => saveStreak(streak), [streak]);
+  useEffect(() => saveAwards(awards), [awards]);
+  useEffect(() => saveShop(shop), [shop]);
   useEffect(() => saveWeek(week), [week]);
 
   const mutateDay = useCallback(
@@ -307,6 +542,357 @@ export default function App() {
   }, [plans, authoritativeDates, habits.completions]);
 
   // -------------------------------------------------------------------------
+  // Progression
+  //
+  // The one-time backfill, then a per-day reconcile that runs on every change.
+  //
+  // Both go through the same idempotent path: a day's XP is recomputed from its
+  // blocks and only the *difference* against the stored figure moves the lifetime
+  // total. That is what makes it safe to run this on every render pass — and it is
+  // the same discipline that goal credits needed after getting it wrong once.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (progress.backfilledOn) return;
+    // Score the whole archive once, so an existing user starts at the level their
+    // real work has already earned rather than at zero. XP only — badges stay
+    // sealed so every one of them is still a live surprise.
+    // The archive is scored in full — every day of it counts toward the lifetime
+    // total — but only days inside the retention window keep a stat afterwards, so
+    // nothing outside it can ever be reconciled a second time.
+    const dates = listPlanDates();
+    const days = dates.map((d) => ({ date: d, blocks: loadPlan(d).blocks }));
+    const result = reconcileDays(emptyProgress(), {}, days, categories);
+    const stats = pruneStats(result.stats, todayKey);
+    const seeded = { ...result.progress, backfilledOn: todayKey };
+
+    // Resolve the streak here too, so the badge seal below sees a complete picture.
+    // Split across effects it would seal the level badges but not the streak ones,
+    // and the stragglers would then pop as live unlocks minutes later.
+    const streakResult = resolveStreak(emptyStreak(), stats, dayMarks, todayKey);
+
+    // Seal everything already true. Recorded as earned, paid nothing — see
+    // `sealPriorBadges` for why leaving them locked would be its own kind of lie.
+    const sealKeys = sealPriorBadges(
+      emptyAwards(),
+      badgeContext({
+        progress: seeded,
+        streak: streakResult.state,
+        stats,
+        marks: dayMarks,
+        todayBlocks: loadPlan(todayKey).blocks,
+        categories,
+        today: todayKey,
+        epoch: todayKey,
+        comebackToday: false,
+      })
+    );
+
+    setProgress(seeded);
+    setDayStats(stats);
+    setStreak(streakResult.state);
+    if (sealKeys.length > 0) setAwards(grantAwards(emptyAwards(), sealKeys).ledger);
+
+    if (seeded.totalXp > 0) {
+      const s = standingFor(seeded.totalXp);
+      const sealed = sealKeys.filter((k) => k.startsWith('badge:')).length;
+      setToast(
+        `Prior service counted — ${seeded.totalXp.toLocaleString()} XP from ${dates.length} recorded day${dates.length === 1 ? '' : 's'}. You start as ${s.rank}, level ${s.level}` +
+          (sealed > 0
+            ? `, with ${sealed} badge${sealed === 1 ? '' : 's'} already on the shelf.`
+            : '.')
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Reconcile every day currently in memory.
+   *
+   * Keyed on a cheap signature of the loaded days rather than on `plans` itself, so
+   * an unrelated re-render does not re-walk 42 days. `progressRef` keeps the effect
+   * off the progress object, which it writes to — depending on what you set is how
+   * you get a render loop.
+   */
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
+  const statsRef = useRef(dayStats);
+  statsRef.current = dayStats;
+
+  const dayFingerprint = useMemo(
+    () =>
+      authoritativeDates
+        .filter((d) => plans[d] != null)
+        .map((d) => {
+          const bs = plans[d].blocks;
+          return `${d}:${bs.map((b) => `${b.id}${b.completed ? '1' : '0'}${b.start}-${b.end}${b.completedAt ?? ''}`).join(',')}`;
+        })
+        .join('|'),
+    [authoritativeDates, plans]
+  );
+
+  useEffect(() => {
+    if (!progressRef.current.backfilledOn) return;
+    // Two guards, both load-bearing.
+    //
+    // `withinRetention` stops a pruned day being reconciled, which would read its
+    // delta as the whole amount and count its XP twice.
+    //
+    // The presence check stops a day being scored before its plan has loaded. A date
+    // becomes authoritative as soon as a stored record exists, but `plans` fills in
+    // asynchronously — so without this, every day is briefly scored as EMPTY and then
+    // rescored once its blocks arrive. The balance came out right because the two
+    // deltas cancelled, which is exactly why it went unnoticed.
+    const days = authoritativeDates
+      .filter((d) => withinRetention(d, todayKey) && plansRef.current[d] != null)
+      .map((d) => ({ date: d, blocks: plansRef.current[d]!.blocks }));
+    const boosts = Object.fromEntries(days.map((d) => [d.date, boostFor(shopRef.current, d.date)]));
+    const before = progressRef.current.totalXp;
+    const result = reconcileDays(progressRef.current, statsRef.current, days, categories, boosts);
+    if (!result.changed) return;
+
+    setProgress(result.progress);
+    setDayStats(pruneStats(result.stats, todayKey));
+
+    // Celebrate only forward movement. Un-ticking something silently gives the XP
+    // back — no message, no sad noise. Momentum, not guilt.
+    const after = result.progress.totalXp;
+    if (after <= before) return;
+
+    const crossed = levelsCrossed(before, after);
+    if (crossed.length === 0) return;
+
+    /**
+     * Which crossing to put on screen when a single day crossed several.
+     *
+     * Not simply the last one. A day that prestiges may carry on into level 3 of the
+     * new cycle, and celebrating level 3 would bury the thing that actually happened
+     * — so a prestige crossing wins, then the highest arc capstone, then the last
+     * ordinary level. The XP figure and meter always show the true current standing
+     * regardless, so nothing here misreports where you are.
+     */
+    const startPrestige = standingFor(before).prestige;
+    const prestigeCrossing = crossed.find((c) => c.prestige > startPrestige);
+    const milestoneCrossing = [...crossed].reverse().find((c) => c.milestone);
+    const celebrate = prestigeCrossing ?? milestoneCrossing ?? crossed[crossed.length - 1];
+
+    if (prestigeCrossing) {
+      setTakeover({ standing: prestigeCrossing, prestige: true });
+      sfxPrestige();
+    } else if (milestoneCrossing) {
+      setTakeover({ standing: milestoneCrossing, prestige: false });
+      sfxMilestone();
+    } else {
+      setLevelToast(celebrate);
+      sfxLevel();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayFingerprint, categories]);
+
+  // -------------------------------------------------------------------------
+  // Streak resolution
+  //
+  // Runs after the XP pass, because it reads the day stats that pass produces.
+  // Lazy and idempotent in the same way as the weekly and monthly rollovers: the
+  // app may have been shut for a fortnight, so every elapsed day is walked once and
+  // `resolvedThrough` is what stops it being walked twice.
+  //
+  // Today is deliberately never settled here — a morning with nothing done yet must
+  // not break a run the afternoon was about to save.
+  // -------------------------------------------------------------------------
+  const streakRef = useRef(streak);
+  streakRef.current = streak;
+  const awardsRef = useRef(awards);
+  awardsRef.current = awards;
+
+  useEffect(() => {
+    if (!progressRef.current.backfilledOn) return;
+    const withCapacity = {
+      ...streakRef.current,
+      capacity: freezeCapacity(shopRef.current, FREEZE_CAPACITY),
+    };
+    const result = resolveStreak(withCapacity, statsRef.current, dayMarks, todayKey);
+    if (!result.changed && result.state.capacity === streakRef.current.capacity) return;
+
+    setStreak(result.state);
+
+    // One-off awards go through the ledger, so the same comeback can never be paid
+    // twice however many times this effect runs.
+    if (result.awards.length > 0 || result.brass > 0) {
+      const { ledger, granted } = grantAwards(awardsRef.current, result.awards);
+      // Award XP only for keys that were genuinely new; kept-day brass is guarded by
+      // `resolvedThrough` instead, since it is paid per day rather than per award.
+      const xp = granted.length > 0 ? result.xp : 0;
+      const brass = result.brass + Math.max(0, Math.round(xp * 0.1));
+      if (granted.length > 0) setAwards(ledger);
+      if (xp > 0 || brass > 0) {
+        setProgress((p) => ({ ...p, totalXp: p.totalXp + xp, brass: p.brass + brass }));
+      }
+      const milestone = biggestStreakMilestone(granted);
+      if (deservesTakeover(milestone)) {
+        setRunTakeover(milestone);
+        sfxMilestone();
+      } else if (milestone != null) {
+        setToast(`${milestone} days running. +${result.xp} XP.`);
+      }
+    }
+
+    // Say something only when the safety net actually did something, or when a run
+    // ended. Both are framed as what they are: the net worked, or today starts over.
+    if (result.awards.some((k) => k.startsWith('comeback:'))) {
+      comebackTodayRef.current = true;
+    }
+
+    const froze = result.days.filter((d) => d.outcome === 'frozen');
+    const reset = result.days.some((d) => d.outcome === 'reset');
+    if (froze.length > 0) {
+      setToast(
+        froze.length === 1
+          ? `A freeze covered ${froze[0].date} — your run is intact.`
+          : `${froze.length} freezes were used while you were away. Your run is intact.`
+      );
+    } else if (reset) {
+      setToast('Your run starts fresh today. The first day you finish is worth extra.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayStats, dayMarks, todayKey]);
+
+  /**
+   * Routine streak milestones, paid once each.
+   *
+   * Separate from day-streak resolution because a routine's run is derived from its
+   * own completion log, not from whether the day as a whole was kept — the two
+   * measure different things and only meet here, in the same currency.
+   */
+  useEffect(() => {
+    const runs = dueStatuses(habits, todayKey, new Set()).map((r) => ({
+      templateId: r.template.id,
+      current: r.streak.current,
+    }));
+    const due = routineAwardsDue(awardsRef.current, runs);
+    if (due.keys.length === 0) return;
+    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
+    if (granted.length === 0) return;
+    setAwards(ledger);
+    setProgress((p) => ({
+      ...p,
+      totalXp: p.totalXp + due.xp,
+      brass: p.brass + Math.max(1, Math.round(due.xp * 0.1)),
+    }));
+    const first = granted[0].split(':');
+    const label = habits.templates.find((t) => t.id === first[1])?.label ?? 'A routine';
+    setToast(`${label} — ${first[2]} days running. +${due.xp} XP.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [habits, todayKey]);
+
+  /**
+   * Pay a habit bonus, once.
+   *
+   * Everything routes through the ledger, so an effect that re-runs on every render
+   * cannot pay twice — the same guarantee the badges and streak milestones rely on.
+   */
+  const payBonus = useCallback(
+    (award: { keys: string[]; xp: number; disciplines: Partial<Record<DisciplineId, number>>; labels: string[] }) => {
+      if (award.keys.length === 0) return;
+      const { ledger, granted } = grantAwards(awardsRef.current, award.keys);
+      if (granted.length === 0) return;
+      setAwards(ledger);
+      setProgress((p) => ({
+        ...p,
+        totalXp: p.totalXp + award.xp,
+        brass: p.brass + Math.max(1, Math.round(award.xp * 0.1)),
+        disciplines: mergeDisciplines(p.disciplines ?? {}, award.disciplines),
+      }));
+      setToast(`${award.labels.join(' · ')} · +${award.xp} XP`);
+    },
+    []
+  );
+
+  /**
+   * Tomorrow planned while it is still today.
+   *
+   * Watched rather than hooked to the build button, because a day can be planned by
+   * building it, by dragging a block into it, or by adding one directly — and the
+   * bonus is for the outcome, not for one particular route to it.
+   */
+  useEffect(() => {
+    if (!progressRef.current.backfilledOn) return;
+    payBonus(planAheadDue(awardsRef.current, plansRef.current, todayKey));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayFingerprint, todayKey, payBonus]);
+
+  /**
+   * Evaluate the badge library.
+   *
+   * Runs after the XP and streak passes, because it reads what both produce. Every
+   * grant goes through the award ledger, so a condition that stays true forever —
+   * "reach level 5" — pays exactly once however many times this is evaluated.
+   *
+   * `backfilledOn` doubles as the epoch: counting badges measure from the day
+   * tracking began, so the archive that was backfilled for XP cannot pre-unlock
+   * achievements it was never meant to.
+   */
+  useEffect(() => {
+    if (!progressRef.current.backfilledOn) return;
+    const context = badgeContext({
+      progress: progressRef.current,
+      streak: streakRef.current,
+      stats: statsRef.current,
+      marks: dayMarks,
+      todayBlocks: plansRef.current[todayKey]?.blocks ?? [],
+      categories,
+      today: todayKey,
+      epoch: progressRef.current.backfilledOn,
+      comebackToday: comebackTodayRef.current,
+    });
+    const due = evaluateBadges(awardsRef.current, context);
+    if (due.keys.length === 0) return;
+
+    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
+    if (granted.length === 0) return;
+    setAwards(ledger);
+
+    // Built by loop rather than filtered: `badgeById` returns the rule, which carries
+    // a `test` function, and a type predicate narrowing to the plain def would be
+    // widening rather than narrowing.
+    const defs: BadgeDef[] = [];
+    for (const key of granted) {
+      const def = badgeById(badgeIdFromKey(key));
+      if (def) defs.push(def);
+    }
+    const xp = defs.reduce((sum, d) => sum + d.xp, 0);
+    setProgress((p) => ({
+      ...p,
+      totalXp: p.totalXp + xp,
+      brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
+    }));
+    setBadgeQueue((q) => [...q, ...defs]);
+    sfxLevel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayStats, streak, dayMarks, todayKey, categories]);
+
+  /**
+   * Fire once when today crosses the threshold.
+   *
+   * Watched rather than computed inside the completion handler, because a day can
+   * also cross by editing a block's length or un-ticking something elsewhere — and
+   * the flourish should follow the fact, not one particular gesture that caused it.
+   */
+  const keptTodayRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    const kept = todayQualifies(
+      dayStats[todayKey],
+      dayMarks[todayKey] != null
+    );
+    const was = keptTodayRef.current;
+    keptTodayRef.current = kept;
+    // First observation only establishes the baseline; it is not an event.
+    if (was === null || was === kept || !kept) return;
+    setRunKept({ run: streakRef.current.current + 1, seed: Date.now() });
+    sfxDayCleared();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayStats, dayMarks, todayKey]);
+
+  // -------------------------------------------------------------------------
   // Derived values
   // -------------------------------------------------------------------------
   const dayPlan = plans[date] ?? { date, tasks: [], blocks: [] };
@@ -358,10 +944,21 @@ export default function App() {
   const monthRecords = useMemo(() => {
     const current = currentMonthKey();
     const sealed = loadAllMonths().filter((m) => m.month !== current);
-    return [...sealed, monthInProgress(current, loadAllWeeks())];
+    const rows = [...sealed, monthInProgress(current, loadAllWeeks())];
+
+    // A month can hold day marks without holding any goal history — import a past
+    // month's gig schedule and there is nothing for the rollover to have sealed. It
+    // still needs a row, or those marks are counted nowhere.
+    const listed = new Set(rows.map((m) => m.month));
+    for (const monthKey of monthsWithMarks(dayMarks)) {
+      if (listed.has(monthKey)) continue;
+      rows.push(emptyMonthRecord(monthKey));
+      listed.add(monthKey);
+    }
+    return rows;
     // `week` is a dependency so ticking a block re-reads the month in progress.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [week, carryover, nav]);
+  }, [week, carryover, nav, dayMarks]);
 
   /** This month's ratio per goal id, for the small gauge on each weekly goal. */
   const monthRatios = useMemo(() => {
@@ -386,6 +983,8 @@ export default function App() {
     [goalsWeek, week]
   );
 
+  const reviewSeen = useRef('');
+
   const review = useMemo(() => {
     const blocksByDate: Record<string, Block[]> = {};
     for (const d of weekDates(goalsWeek)) {
@@ -393,6 +992,306 @@ export default function App() {
     }
     return buildWeekReview(goalsWeekRecord, blocksByDate);
   }, [goalsWeekRecord, goalsWeek, plans]);
+
+  /**
+   * Reading a finished week's review.
+   *
+   * Granted on looking rather than at rollover, and the reason is data: a review is
+   * derived from that week's blocks, and blocks fall out of the retention window. At
+   * the moment you are looking at it, everything needed is already loaded — and
+   * looking is the behaviour being rewarded.
+   *
+   * The ref guards against re-firing while the same week sits on screen; the ledger
+   * guards against ever paying twice.
+   */
+  useEffect(() => {
+    if (nav !== 'goals') return;
+    if (!progressRef.current.backfilledOn) return;
+    const seenKey = `${goalsWeek}`;
+    if (reviewSeen.current === seenKey) return;
+    reviewSeen.current = seenKey;
+    payBonus(reviewAwardsDue(awardsRef.current, goalsWeek, currentWeekKey(), review));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, goalsWeek, review, payBonus]);
+
+  /** Area XP across everything currently loaded. */
+  const areas = useMemo(() => {
+    const t = areaTotals(
+      authoritativeDates.map((d) => ({ date: d, blocks: plans[d]?.blocks ?? [] })),
+      categories
+    );
+    // Consistency is the one discipline not derived from blocks — it accumulates in
+    // the streak record as days are kept, so it is merged in rather than computed.
+    // Focus and Endurance are derived from blocks; Consistency accumulates in the
+    // streak record; Planning and Insight are banked in progress. Three homes because
+    // they have three different natures, merged here for display only.
+    return {
+      byCategory: t.byCategory,
+      byDiscipline: {
+        ...t.byDiscipline,
+        consistency: streak.consistencyXp,
+        ...(progress.disciplines ?? {}),
+      },
+    };
+  }, [authoritativeDates, plans, categories, streak.consistencyXp, progress.disciplines]);
+
+  const todayReckoning = useMemo(
+    () => reckonDay(todayKey, plans[todayKey]?.blocks ?? [], categories),
+    [plans, todayKey, categories]
+  );
+
+  /** The trailing fortnight, oldest first, for the spark columns. */
+  const recentDates = useMemo(
+    () => Array.from({ length: 14 }, (_, i) => addDays(todayKey, i - 13)),
+    [todayKey]
+  );
+
+  /**
+   * This week's board, generated fresh.
+   *
+   * Keyed to the week the calendar is showing rather than to today, so stepping back
+   * shows what that week offered. Only the CURRENT week can pay out — see the effect
+   * below — because a past week's set is history, not an outstanding mission.
+   */
+  const questContext = useMemo(
+    () =>
+      buildWeekContext({
+        weekKey,
+        plans,
+        stats: dayStats,
+        week,
+        habits,
+        marks: dayMarks,
+        markDefs,
+        categories,
+      }),
+    [weekKey, plans, dayStats, week, habits, dayMarks, markDefs, categories]
+  );
+
+  const quests = useMemo(
+    () => questsFor(questContext, { extraWildcard: hasExtraWildcard(shop) }),
+    [questContext, shop]
+  );
+  const daily = useMemo(() => dailyChallenge(questContext, todayKey), [questContext, todayKey]);
+  const weekly = useMemo(() => weeklyChallenge(questContext), [questContext]);
+
+  /**
+   * A wide trailing window for the codex.
+   *
+   * Loaded from storage rather than taken from `plans`, which only ever holds what the
+   * calendar is showing — a requirement of "twenty timed completions" that moved
+   * whenever you changed view would be unusable. Only computed while Standing is open,
+   * because it is ninety reads.
+   */
+  const INSIGHT_WINDOW_DAYS = 90;
+  const insightContext = useMemo(() => {
+    if (nav !== 'standing') return buildInsightContext({}, [], dayStats, categories);
+    const dates = Array.from({ length: INSIGHT_WINDOW_DAYS }, (_, i) =>
+      addDays(todayKey, i - (INSIGHT_WINDOW_DAYS - 1))
+    );
+    const stored = new Set(listPlanDates());
+    const wanted = dates.filter((d) => stored.has(d));
+    return buildInsightContext(loadPlans(wanted), wanted, dayStats, categories);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, todayKey, dayStats, categories]);
+
+  const codex = useMemo(
+    () => insightStatuses(awards, insightContext),
+    [awards, insightContext]
+  );
+
+  const standing = useMemo(() => standingFor(progress.totalXp), [progress.totalXp]);
+
+  /**
+   * Unseal codex cards whose data requirement is met.
+   *
+   * Only while Standing is open, since that is the only time the wide window is
+   * loaded. An insight that unsealed silently in the background would pay for a
+   * discovery you never saw.
+   */
+  useEffect(() => {
+    if (nav !== 'standing') return;
+    if (!progressRef.current.backfilledOn) return;
+    const due = unlocksDue(awardsRef.current, insightContext);
+    if (due.keys.length === 0) return;
+
+    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
+    if (granted.length === 0) return;
+    setAwards(ledger);
+    setProgress((p) => ({
+      ...p,
+      totalXp: p.totalXp + due.xp,
+      brass: p.brass + Math.max(1, Math.round(due.xp * 0.1)),
+      disciplines: mergeDisciplines(p.disciplines ?? {}, { insight: due.xp }),
+    }));
+    setCodexQueue((q) => [
+      ...q,
+      ...due.ids.flatMap((id) => {
+        const rule = insightById(id);
+        return rule ? [{ name: rule.name, glyph: rule.glyph, xp: rule.xpUnlock }] : [];
+      }),
+    ]);
+    sfxMilestone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav, insightContext]);
+
+  useEffect(() => {
+    if (codexQueue.length === 0) return;
+    const id = setTimeout(() => setCodexQueue((q) => q.slice(1)), 3200);
+    return () => clearTimeout(id);
+  }, [codexQueue]);
+
+  const shopRef = useRef(shop);
+  shopRef.current = shop;
+
+  const shopOffers = useMemo(
+    () => offersFor(shop, progress, weekKey),
+    [shop, progress, weekKey]
+  );
+
+  const handleBuy = useCallback(
+    (itemId: string) => {
+      const result = purchase(shopRef.current, progressRef.current, weekKey, itemId);
+      if (!result.ok) {
+        const offer = shopOffers.find((o) => o.item.id === itemId);
+        setToast(
+          result.reason === 'brass'
+            ? `Not enough brass — ${((offer?.item.price ?? 0) - progressRef.current.brass).toLocaleString()} short.`
+            : result.reason === 'level'
+              ? `That needs level ${offer?.needsLevel}.`
+              : result.reason === 'rotation'
+                ? 'Out of stock this week.'
+                : 'You already hold as many as you can.'
+        );
+        return;
+      }
+      setShop(result.shop);
+      // Brass falls and the lifetime spend rises by the same amount, which is what
+      // keeps derived earnings equal to balance plus spend.
+      setProgress((p) => ({
+        ...p,
+        brass: Math.max(0, p.brass - result.spend),
+        brassSpent: p.brassSpent + result.spend,
+      }));
+      const item = itemById(itemId);
+      setToast(`${item?.name ?? 'Bought'} — ${result.spend.toLocaleString()} brass.`);
+      sfxSpend();
+    },
+    [weekKey, shopOffers]
+  );
+
+  const handleEquip = useCallback((itemId: string) => {
+    setShop((s) => equipItem(s, itemId));
+  }, []);
+
+  const handleUnequip = useCallback((slot: 'finish' | 'meter' | 'title' | 'frame') => {
+    setShop((s) => unequipSlot(s, slot));
+  }, []);
+
+  /**
+   * Spend a freeze refill the moment one is held and a freeze is missing.
+   *
+   * Applied automatically for the same reason the freeze itself is: something bought
+   * to protect a run should not need remembering at the moment it is needed.
+   */
+  useEffect(() => {
+    if ((shop.stock['freeze-refill'] ?? 0) === 0) return;
+    if (streak.freezes >= streak.capacity) return;
+    const r = spendRefill(shopRef.current);
+    if (!r.ok) return;
+    setShop(r.shop);
+    setStreak((st) => ({ ...st, freezes: Math.min(st.capacity, st.freezes + 1) }));
+    setToast('Freeze refilled.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shop.stock, streak.freezes, streak.capacity]);
+
+  /**
+   * Paid the first time a card is actually opened.
+   *
+   * Reading is a separate reward from unsealing because they are separate acts: the
+   * data earned the unseal, but an insight you have not looked at has done nothing
+   * for you.
+   */
+  const handleReadInsight = useCallback((id: string) => {
+    if (isRead(awardsRef.current, id)) return;
+    const rule = insightById(id);
+    if (!rule) return;
+    const { ledger, granted } = grantAwards(awardsRef.current, [readKey(id)]);
+    if (granted.length === 0) return;
+    setAwards(ledger);
+    setProgress((p) => ({
+      ...p,
+      totalXp: p.totalXp + rule.xpRead,
+      brass: p.brass + Math.max(1, Math.round(rule.xpRead * 0.1)),
+      disciplines: mergeDisciplines(p.disciplines ?? {}, { insight: rule.xpRead }),
+    }));
+    setToast(`${rule.name} — read. +${rule.xpRead} XP`);
+  }, []);
+
+  /**
+   * Pay finished quests and challenges.
+   *
+   * Guarded on the week being the current one: a past week's board is a record, and
+   * scrolling back through the calendar must not hand out bonuses for sets that closed
+   * weeks ago. The ledger would stop a second payment, but it would not stop a first
+   * one that was never earned in the present.
+   */
+  useEffect(() => {
+    if (!progressRef.current.backfilledOn) return;
+    if (weekKey !== currentWeekKey()) return;
+    const due = questPayout(awardsRef.current, quests, [daily, weekly]);
+    if (due.keys.length === 0) return;
+
+    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
+    if (granted.length === 0) return;
+    setAwards(ledger);
+    setProgress((p) => ({
+      ...p,
+      totalXp: p.totalXp + due.xp,
+      brass: p.brass + Math.max(1, Math.round(due.xp * 0.1)),
+    }));
+
+    // One entry per finished thing, so a day that closes three plays three moments.
+    const names = new Set(due.names);
+    setQuestQueue((q) => [
+      ...q,
+      ...[...names].map((name) => ({
+        name,
+        xp:
+          quests.find((x) => x.name === name)?.bonusXp ??
+          [daily, weekly].find((c) => c.name === name)?.xp ??
+          0,
+      })),
+    ]);
+    sfxMilestone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quests, daily, weekly, weekKey]);
+
+  useEffect(() => {
+    if (questQueue.length === 0) return;
+    const id = setTimeout(() => setQuestQueue((q) => q.slice(1)), 2800);
+    return () => clearTimeout(id);
+  }, [questQueue]);
+
+
+  const badges = useMemo(
+    () =>
+      badgeStatuses(
+        awards,
+        badgeContext({
+          progress,
+          streak,
+          stats: dayStats,
+          marks: dayMarks,
+          todayBlocks: plans[todayKey]?.blocks ?? [],
+          categories,
+          today: todayKey,
+          epoch: progress.backfilledOn,
+          comebackToday: false,
+        })
+      ),
+    [awards, progress, streak, dayStats, dayMarks, plans, todayKey, categories]
+  );
 
   const canReplan = useMemo(
     () => dayPlan.blocks.some((b) => !b.completed && !b.auto),
@@ -424,6 +1323,24 @@ export default function App() {
       mutateDay(date, (p) => ({ ...p, tasks: p.tasks.filter((t) => t.id !== id) }));
     },
     [date, mutateDay]
+  );
+
+  /**
+   * A marked day warns but never blocks.
+   *
+   * The mark records something about the day the scheduler knows nothing about —
+   * a flight, a shoot — so the honest move is to say so and let the decision
+   * stand. Refusing to build would make the mark a cage.
+   */
+  const warnIfMarked = useCallback(
+    (day: string, placed: number) => {
+      const mark = markById(markDefs, dayMarks[day]);
+      if (!mark) return;
+      setToast(
+        `${placed} block${placed === 1 ? '' : 's'} placed — heads up, this day is marked ${mark.label.toLowerCase()}.`
+      );
+    },
+    [markDefs, dayMarks]
   );
 
   const handleBuildDay = useCallback(() => {
@@ -464,15 +1381,23 @@ export default function App() {
     );
 
     const completed = new Set(plan.blocks.filter((b) => b.completed).map((b) => b.id));
-    const blocks = result.blocks.map((b) =>
-      completed.has(b.id) ? { ...b, completed: true } : b
+    // Priority lives on the Task and is consumed by the scheduler; carrying it onto
+    // the Block is what lets effort be weighted after the fact.
+    const priorityOf = new Map(
+      [...intakeFixed, ...displaced, ...intakeFlex].map((t) => [t.id, t.priority])
     );
+    const blocks = result.blocks.map((b) => {
+      const withPriority =
+        priorityOf.get(b.id) === 'high' ? { ...b, priority: 'high' as const } : b;
+      return completed.has(b.id) ? { ...withPriority, completed: true } : withPriority;
+    });
 
     mutateDay(date, (p) => ({ ...p, blocks, tasks: [] }));
     setOverflow(result.overflow);
     setOverflowReasons(result.reasons);
     setBuildPulse((n) => n + 1);
-  }, [plans, date, settings, rules, mutateDay]);
+    warnIfMarked(date, blocks.filter((b) => !b.auto).length);
+  }, [plans, date, settings, rules, mutateDay, warnIfMarked]);
 
   const handleRebuildFromNow = useCallback(() => {
     const plan = plans[date];
@@ -512,7 +1437,8 @@ export default function App() {
     setOverflow(result.overflow);
     setOverflowReasons(result.reasons);
     setBuildPulse((n) => n + 1);
-  }, [plans, date, settings, rules, mutateDay]);
+    warnIfMarked(date, blocks.filter((b) => !b.auto).length);
+  }, [plans, date, settings, rules, mutateDay, warnIfMarked]);
 
   // -------------------------------------------------------------------------
   // Block actions — all keyed by date, because the week grid spans seven days
@@ -583,7 +1509,10 @@ export default function App() {
       const block = source?.blocks.find((b) => b.id === id);
       if (!source || !block) return;
 
-      const incoming = { ...block, ...patch };
+      // A deliberate move, so it counts. Reflow displacement deliberately does not:
+      // one drag can push six blocks down, and counting those would mark all seven
+      // as rescheduled and make the number meaningless.
+      const incoming = { ...block, ...patch, moves: (block.moves ?? 0) + 1 };
       const destination = plansRef.current[to]?.blocks ?? [];
       const landing = reflowInsert(destination, incoming, settings.workingEnd);
       if (!landing.ok) {
@@ -619,14 +1548,46 @@ export default function App() {
         }
       }
 
+      const nowCompleted = !block?.completed;
+
       mutateDay(day, (p) => ({
         ...p,
         blocks: p.blocks.map((b) =>
-          b.id === id ? { ...b, completed: !b.completed } : b
+          b.id === id
+            ? {
+                ...b,
+                completed: !b.completed,
+                // Stamped on the way in, cleared on the way out so an un-tick
+                // leaves no claim about when anything happened.
+                completedAt: !b.completed ? minutesSinceMidnightOf(day) : undefined,
+              }
+            : b
         ),
       }));
+
+      if (!nowCompleted || !block) return;
+
+      // Immediate feedback, computed here rather than waiting for the reconcile
+      // pass — a reward that arrives a frame after the click does not feel caused
+      // by it. The authoritative total still comes from reconciliation.
+      const dayBlocks = (plansRef.current[day]?.blocks ?? []).map((b) =>
+        b.id === id ? { ...b, completed: true, completedAt: minutesSinceMidnightOf(day) } : b
+      );
+      const run = comboRuns(dayBlocks).get(id) ?? 0;
+      const { xp } = xpForBlock(
+        { ...block, completed: true, completedAt: minutesSinceMidnightOf(day) },
+        categories,
+        run
+      );
+      setXpFloat({ key: Date.now(), xp, combo: run });
+      if (run > 0) sfxCombo(run);
+      else sfxComplete();
+
+      const after = reckonDay(day, dayBlocks, categories);
+      const before = reckonDay(day, plansRef.current[day]?.blocks ?? [], categories);
+      if (after.stat.cleared && !before.stat.cleared) sfxDayCleared();
     },
-    [mutateDay]
+    [mutateDay, categories]
   );
 
   const handleDeleteBlock = useCallback(
@@ -864,6 +1825,67 @@ export default function App() {
   }, []);
 
   // -------------------------------------------------------------------------
+  // Day marks
+  // -------------------------------------------------------------------------
+  const handleCycleMark = useCallback(
+    (day: string) => {
+      if (markDefs.length === 0) {
+        setToast('No day marks defined yet. Add some under Categories.');
+        return;
+      }
+      setDayMarks((prev) => {
+        const next = cycleMark(prev[day] ?? null, markDefs);
+        return setMark(prev, day, next);
+      });
+    },
+    [markDefs]
+  );
+
+  const handleApplyMarks = useCallback(
+    (proposal: Record<string, string | null>) => {
+      // Report what actually CHANGED, not what the proposal covers. A proposal spans
+      // every day of the month, carrying null for the ones the sampler declined, so
+      // counting nulls reads "cleared 25" for a month that was already blank.
+      let marked = 0;
+      let cleared = 0;
+      for (const [date, markId] of Object.entries(proposal)) {
+        const was = dayMarks[date] ?? null;
+        if (markId === was) continue;
+        if (markId === null) cleared++;
+        else marked++;
+      }
+
+      setDayMarks((prev) => applyProposal(prev, proposal));
+      setMarksOpen(false);
+      setToast(
+        marked === 0 && cleared === 0
+          ? 'Nothing changed — those days already read that way.'
+          : [
+              marked > 0 ? `Marked ${marked} day${marked === 1 ? '' : 's'}` : '',
+              cleared > 0 ? `cleared ${cleared}` : '',
+            ]
+              .filter(Boolean)
+              .join(', ') + '.'
+      );
+    },
+    [dayMarks]
+  );
+
+  /**
+   * Renaming or recolouring a mark is safe — marks reference definitions by id, so
+   * every already-marked day follows the change. Deleting one leaves orphans, which
+   * `orphanedMarks` surfaces rather than silently hiding.
+   */
+  const handleChangeMarkDefs = useCallback((defs: DayMarkDef[]) => {
+    setMarkDefs(defs);
+  }, []);
+
+  const markSummaryForCursor = useMemo(
+    () => describeMarks(countMarksInMonth(dayMarks, monthCursor.slice(0, 7)), markDefs),
+    [dayMarks, monthCursor, markDefs]
+  );
+
+  // -------------------------------------------------------------------------
   // Navigation
   // -------------------------------------------------------------------------
   // Direction of travel, so a view transition moves the way the date is moving.
@@ -919,6 +1941,18 @@ export default function App() {
           routines: dueRoutines.filter((r) => r.streak.dueToday && !r.placed).length,
           carryover: carryover.length,
         }}
+        standing={{
+          level: standing.level,
+          rank: standing.rank,
+          progress: standing.levelProgress,
+          sigilForm: standing.sigilForm,
+          sigilPips: standing.sigilPips,
+        }}
+        brass={progress.brass}
+        run={displayRun(streak, dayStats[todayKey], dayMarks[todayKey] != null)}
+        freezes={streak.freezes}
+        sfxOn={sfxOn}
+        onToggleSfx={() => setSfxOn((v) => !v)}
       />
 
       <main className="flex-1 min-w-0 flex flex-col h-full">
@@ -934,6 +1968,11 @@ export default function App() {
               onAdd={handleQuickAdd}
               canReplan={canReplan && view === 'day'}
               onRebuildFromNow={handleRebuildFromNow}
+              // The importer reads a whole month at once, so it is only offered
+              // where a whole month is on screen.
+              onImportMarks={view === 'month' ? () => setMarksOpen(true) : undefined}
+              markSummary={view === 'month' ? markSummaryForCursor : ''}
+              dayMark={markById(markDefs, dayMarks[date])}
             />
 
             {/* One keyed region per view+period, so switching view OR stepping
@@ -945,8 +1984,11 @@ export default function App() {
                 cursor={date}
                 plans={plans}
                 categories={categories}
+                marks={dayMarks}
+                markDefs={markDefs}
                 onOpenDay={handleOpenDay}
                 onEditBlock={handleEditBlock}
+                onCycleMark={handleCycleMark}
               />
             ) : view === 'week' ? (
               <div className="flex-1 min-h-0 flex flex-col px-6 pb-6">
@@ -958,6 +2000,8 @@ export default function App() {
                     selected={date}
                     onSelectDay={handleOpenDay}
                     axisWidth={AXIS_W}
+                    marks={dayMarks}
+                    markDefs={markDefs}
                   />
                   <TimeGrid
                     dates={visibleDates}
@@ -1055,6 +2099,47 @@ export default function App() {
           </>
         )}
 
+        {nav === 'standing' && (
+          <>
+            <div className="titlebar-drag" />
+            <StandingView
+              progress={progress}
+              streak={streak}
+              todayKey={todayKey}
+              marks={dayMarks}
+              markDefs={markDefs}
+              badges={badges}
+              shop={shop}
+              shopOffers={shopOffers}
+              onBuy={handleBuy}
+              onEquipItem={handleEquip}
+              onUnequipSlot={handleUnequip}
+              previousWeekKey={addWeeks(weekKey, -1)}
+              codex={codex}
+              onReadInsight={handleReadInsight}
+              insightWindowDays={INSIGHT_WINDOW_DAYS}
+              quests={quests}
+              daily={daily}
+              weekly={weekly}
+              awards={awards}
+              routines={dueRoutines.map((r) => ({
+                id: r.template.id,
+                label: r.template.label,
+                current: r.streak.current,
+                dueToday: r.streak.dueToday,
+                doneToday: r.streak.doneToday,
+              }))}
+              today={dayStats[todayKey]}
+              todayLines={todayReckoning.lines}
+              categories={categories}
+              categoryXp={areas.byCategory}
+              disciplineXp={areas.byDiscipline}
+              stats={dayStats}
+              recentDates={recentDates}
+            />
+          </>
+        )}
+
         {nav === 'months' && (
           <>
             <div className="titlebar-drag" />
@@ -1062,6 +2147,8 @@ export default function App() {
               months={monthRecords}
               currentMonth={currentMonthKey()}
               categories={categories}
+              marks={dayMarks}
+              markDefs={markDefs}
             />
           </>
         )}
@@ -1089,6 +2176,9 @@ export default function App() {
               onUpdate={handleUpdateCategory}
               onRemove={handleRemoveCategory}
               onReorder={handleReorderCategory}
+              markDefs={markDefs}
+              marks={dayMarks}
+              onChangeMarkDefs={handleChangeMarkDefs}
             />
           </>
         )}
@@ -1106,6 +2196,17 @@ export default function App() {
         onDelete={handleDeleteBlock}
       />
 
+      <DayMarkImport
+        open={marksOpen}
+        defs={markDefs}
+        marks={dayMarks}
+        initialMonth={monthCursor.slice(0, 7)}
+        onClose={() => setMarksOpen(false)}
+        onApply={handleApplyMarks}
+        onChangeDefs={handleChangeMarkDefs}
+        onNotify={setToast}
+      />
+
       <WorkingHoursModal
         open={hoursOpen}
         settings={settings}
@@ -1119,6 +2220,29 @@ export default function App() {
         today={todayKey}
         onClose={() => setBackupOpen(false)}
         onNotify={setToast}
+      />
+
+      {/* The reward layer. Three sizes, deliberately unequal — see XpToast. */}
+      <XpFloat award={xpFloat} />
+      <RunKeptToast
+        run={runKept?.run ?? null}
+        seed={runKept?.seed ?? 0}
+        onDone={() => setRunKept(null)}
+      />
+      <RunTakeover days={runTakeover} onDismiss={() => setRunTakeover(null)} />
+      <QuestDoneToast queue={questQueue} onDone={() => setQuestQueue((q) => q.slice(1))} />
+      <CodexUnlockToast queue={codexQueue} onDone={() => setCodexQueue((q) => q.slice(1))} />
+      <BadgeUnlockToast
+        queue={badgeQueue}
+        onDone={() => setBadgeQueue((q) => q.slice(1))}
+      />
+      <LevelToast standing={levelToast} onDone={() => setLevelToast(null)} />
+      <LevelTakeover
+        standing={takeover?.standing ?? null}
+        current={standing}
+        prestige={takeover?.prestige ?? false}
+        nextRank={standing.level < LEVELS_PER_CYCLE ? RANKS[standing.level] : null}
+        onDismiss={() => setTakeover(null)}
       />
 
       <Toast message={toast} onDismiss={() => setToast(null)} />

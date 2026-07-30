@@ -1,11 +1,16 @@
-import { DEFAULT_CATEGORIES, DEFAULT_SETTINGS } from './types';
+import { DEFAULT_CATEGORIES, DEFAULT_DAY_MARKS, DEFAULT_SETTINGS } from './types';
 import type {
+  AwardLedger,
   Block,
   CarryoverItem,
   Category,
   CategoryDef,
   CategoryKind,
   ClearedCarryover,
+  DailyStat,
+  DayMarkDef,
+  DisciplineId,
+  DayMarks,
   GoalCredit,
   HabitStore,
   DayPlan,
@@ -15,11 +20,16 @@ import type {
   RecurringCompletion,
   RecurringTask,
   Settings,
+  StreakState,
   Task,
+  UserProgress,
   WeeklyGoal,
   WeekRecord,
 } from './types';
 import { uid } from './utils/id';
+import { emptyProgress } from './progress';
+import { emptyAwards, emptyStreak } from './streaks';
+import { emptyShop, itemById, type ShopState } from './shop';
 
 // ============================================================================
 // Persistence
@@ -44,6 +54,13 @@ const SETTINGS_KEY = 'dp:settings:v2';
 const CATEGORIES_KEY = 'dp:categories:v1';
 const CARRYOVER_KEY = 'dp:carryover:v1';
 const HABITS_KEY = 'dp:habits:v1';
+const PROGRESS_KEY = 'dp:progress:v1';
+const DAY_STATS_KEY = 'dp:daystats:v1';
+const STREAK_KEY = 'dp:streak:v1';
+const AWARDS_KEY = 'dp:awards:v1';
+const SHOP_KEY = 'dp:shop:v1';
+const MARK_DEFS_KEY = 'dp:markdefs:v1';
+const DAY_MARKS_KEY = 'dp:daymarks:v1';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -54,8 +71,26 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isFiniteNum = (v: unknown): v is number =>
   typeof v === 'number' && Number.isFinite(v);
 
-const isDateKey = (v: unknown): v is string =>
-  typeof v === 'string' && DATE_RE.test(v);
+/**
+ * A date key that names a day that actually exists.
+ *
+ * The shape check alone passed '2026-13-45', which every loader here then treated as
+ * a real day. Nothing in the app can produce one, but a hand-edited or truncated
+ * backup can, and the result is a record keyed to a day no view can ever reach —
+ * invisible, uncountable, and impossible to delete from the UI.
+ *
+ * Round-tripping through Date is what catches it: February 30th normalises to March
+ * 2nd, so a mismatch means the original was never a date.
+ */
+const isDateKey = (v: unknown): v is string => {
+  if (typeof v !== 'string' || !DATE_RE.test(v)) return false;
+  const [y, m, d] = v.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const probe = new Date(y, m - 1, d);
+  return (
+    probe.getFullYear() === y && probe.getMonth() === m - 1 && probe.getDate() === d
+  );
+};
 
 const str = (v: unknown, fallback = ''): string =>
   typeof v === 'string' ? v : fallback;
@@ -150,6 +185,11 @@ function normalizeBlock(r: unknown): Block | null {
     pinned: b.pinned === true,
     goalId: str(b.goalId) || undefined,
     templateId: str(b.templateId) || undefined,
+    // Carried through explicitly. A normaliser that drops a field is not a
+    // formatting detail — it is a silent behaviour change one reload later.
+    completedAt: isFiniteNum(b.completedAt) && b.completedAt >= 0 ? b.completedAt : undefined,
+    priority: b.priority === 'high' ? 'high' : undefined,
+    moves: isFiniteNum(b.moves) && b.moves > 0 ? Math.floor(b.moves) : undefined,
   };
 }
 
@@ -541,6 +581,275 @@ export function loadAllMonths(): MonthRecord[] {
   return listMonthKeys()
     .map(loadMonth)
     .filter((m): m is MonthRecord => m !== null);
+}
+
+// ---------------------------------------------------------------------------
+// Day marks
+//
+// Only the marks themselves are stored — never the screenshot they came from. A
+// pasted image is 1–3 MB as base64 against a ~5 MB localStorage quota, so keeping
+// it would risk the quota that every plan, week and month record shares. The
+// image is sampled and discarded.
+// ---------------------------------------------------------------------------
+
+function normalizeMarkDef(r: unknown, index: number): DayMarkDef | null {
+  if (!r || typeof r !== 'object') return null;
+  const d = r as Record<string, unknown>;
+  const id = str(d.id).trim();
+  const label = str(d.label).trim();
+  if (!id || !label) return null;
+  const color = str(d.color).trim();
+  const sourceColor = str(d.sourceColor).trim();
+  return {
+    id,
+    label,
+    color: HEX_RE.test(color) ? color : '#8b93a7',
+    // Carried through explicitly. Dropping it silently is worse than losing any
+    // other field here: the mark keeps working and looking right, and only the
+    // screenshot importer quietly stops recognising that colour — so the first
+    // session would import fine and every session after it would not.
+    ...(HEX_RE.test(sourceColor) ? { sourceColor } : {}),
+    order: isFiniteNum(d.order) ? d.order : index,
+  };
+}
+
+export function loadDayMarkDefs(): DayMarkDef[] {
+  const parsed = read<unknown>(MARK_DEFS_KEY);
+  if (!Array.isArray(parsed)) return DEFAULT_DAY_MARKS;
+  const cleaned = parsed
+    .map((r, i) => normalizeMarkDef(r, i))
+    .filter(Boolean) as DayMarkDef[];
+  const seen = new Set<string>();
+  const unique = cleaned.filter((d) => {
+    if (seen.has(d.id)) return false;
+    seen.add(d.id);
+    return true;
+  });
+  // Never hand back an empty list — the month view would have nothing to draw
+  // with and the cycle control would be inert.
+  return unique.length > 0 ? unique.sort((a, b) => a.order - b.order) : DEFAULT_DAY_MARKS;
+}
+
+export function saveDayMarkDefs(defs: DayMarkDef[]): void {
+  write(MARK_DEFS_KEY, defs);
+}
+
+export function loadDayMarks(): DayMarks {
+  const parsed = read<Record<string, unknown>>(DAY_MARKS_KEY);
+  if (!parsed || typeof parsed !== 'object') return {};
+  const out: DayMarks = {};
+  for (const [date, markId] of Object.entries(parsed)) {
+    // A bad date key would place a highlight on a day that cannot be navigated
+    // to, so those are dropped rather than kept.
+    if (!isDateKey(date)) continue;
+    const id = str(markId).trim();
+    if (id) out[date] = id;
+  }
+  return out;
+}
+
+export function saveDayMarks(marks: DayMarks): void {
+  write(DAY_MARKS_KEY, marks);
+}
+
+// ---------------------------------------------------------------------------
+// Progression
+//
+// Two records. `UserProgress` is the lifetime standing and is the only thing here
+// that cannot be recomputed — brass gets spent, so the balance is a fact rather
+// than a derivation. Day stats ARE recomputable from plans, but they are stored
+// anyway: they are what reconciliation diffs against to stay idempotent, and
+// plans older than the retention window may be gone.
+// ---------------------------------------------------------------------------
+
+export function loadProgress(): UserProgress {
+  const parsed = read<Record<string, unknown>>(PROGRESS_KEY);
+  if (!parsed || typeof parsed !== 'object') return emptyProgress();
+  const totalXp = isFiniteNum(parsed.totalXp) ? Math.max(0, Math.floor(parsed.totalXp)) : 0;
+  const brass = isFiniteNum(parsed.brass) ? Math.max(0, Math.floor(parsed.brass)) : 0;
+  // Records written before earnings were derived carry `brassEarned`; the spend is
+  // whatever it exceeded the balance by, which is exactly what the old field meant.
+  const legacyEarned = isFiniteNum(parsed.brassEarned)
+    ? Math.max(0, Math.floor(parsed.brassEarned))
+    : 0;
+  const spent = isFiniteNum(parsed.brassSpent)
+    ? Math.max(0, Math.floor(parsed.brassSpent))
+    : Math.max(0, legacyEarned - brass);
+  // Only the banked disciplines are stored; anything else in the record is dropped
+  // rather than trusted, so a stale key cannot inflate a track forever.
+  const banked: Partial<Record<DisciplineId, number>> = {};
+  const raw = parsed.disciplines;
+  if (raw && typeof raw === 'object') {
+    for (const id of ['planning', 'insight'] as DisciplineId[]) {
+      const v = (raw as Record<string, unknown>)[id];
+      if (isFiniteNum(v) && v > 0) banked[id] = Math.floor(v);
+    }
+  }
+
+  return {
+    totalXp,
+    brass,
+    brassSpent: spent,
+    backfilledOn: isDateKey(parsed.backfilledOn) ? parsed.backfilledOn : '',
+    disciplines: banked,
+  };
+}
+
+export function saveProgress(progress: UserProgress): void {
+  write(PROGRESS_KEY, progress);
+}
+
+function normalizeDailyStat(date: string, r: unknown): DailyStat | null {
+  if (!r || typeof r !== 'object') return null;
+  const d = r as Record<string, unknown>;
+  const num = (v: unknown) => (isFiniteNum(v) ? Math.max(0, Math.round(v)) : 0);
+  return {
+    date,
+    plannedMinutes: num(d.plannedMinutes),
+    doneMinutes: num(d.doneMinutes),
+    xpEarned: num(d.xpEarned),
+    brassEarned: num(d.brassEarned),
+    bestCombo: num(d.bestCombo),
+    cleared: d.cleared === true,
+    completedCount: num(d.completedCount),
+    focusMinutes: num(d.focusMinutes),
+  };
+}
+
+export function loadDayStats(): Record<string, DailyStat> {
+  const parsed = read<Record<string, unknown>>(DAY_STATS_KEY);
+  if (!parsed || typeof parsed !== 'object') return {};
+  const out: Record<string, DailyStat> = {};
+  for (const [date, raw] of Object.entries(parsed)) {
+    if (!isDateKey(date)) continue;
+    const stat = normalizeDailyStat(date, raw);
+    if (stat) out[date] = stat;
+  }
+  return out;
+}
+
+export function saveDayStats(stats: Record<string, DailyStat>): void {
+  write(DAY_STATS_KEY, stats);
+}
+
+// ---------------------------------------------------------------------------
+// Streaks and one-off awards
+// ---------------------------------------------------------------------------
+
+export function loadStreak(): StreakState {
+  const parsed = read<Record<string, unknown>>(STREAK_KEY);
+  if (!parsed || typeof parsed !== 'object') return emptyStreak();
+  const base = emptyStreak();
+  const num = (v: unknown, fallback: number) =>
+    isFiniteNum(v) ? Math.max(0, Math.round(v)) : fallback;
+  const capacity = Math.max(1, num(parsed.capacity, base.capacity));
+  const current = num(parsed.current, 0);
+  return {
+    current,
+    // The best run can never be less than the one in progress.
+    longest: Math.max(current, num(parsed.longest, 0)),
+    resolvedThrough: isDateKey(parsed.resolvedThrough) ? parsed.resolvedThrough : '',
+    // Holding more freezes than the capacity allows would let a corrupt record
+    // grant unlimited protection.
+    freezes: Math.min(capacity, num(parsed.freezes, base.freezes)),
+    capacity,
+    refilledOn: isDateKey(parsed.refilledOn) ? parsed.refilledOn : '',
+    frozenDates: Array.isArray(parsed.frozenDates)
+      ? parsed.frozenDates.filter(isDateKey).slice(-60)
+      : [],
+    startedOn: isDateKey(parsed.startedOn) ? parsed.startedOn : '',
+    lastResetOn: isDateKey(parsed.lastResetOn) ? parsed.lastResetOn : '',
+    consistencyXp: num(parsed.consistencyXp, 0),
+  };
+}
+
+export function saveStreak(state: StreakState): void {
+  write(STREAK_KEY, state);
+}
+
+export function loadAwards(): AwardLedger {
+  const parsed = read<Record<string, unknown>>(AWARDS_KEY);
+  if (!parsed || !Array.isArray(parsed.granted)) return emptyAwards();
+  // Deduplicated on read: a duplicate key is harmless for lookups but would grow
+  // without bound, and this record is only ever appended to.
+  const seen = new Set<string>();
+  for (const k of parsed.granted) {
+    if (typeof k === 'string' && k.length > 0 && k.length < 200) seen.add(k);
+  }
+  return { granted: [...seen] };
+}
+
+export function saveAwards(ledger: AwardLedger): void {
+  write(AWARDS_KEY, ledger);
+}
+
+// ---------------------------------------------------------------------------
+// The shop
+// ---------------------------------------------------------------------------
+
+export function loadShop(): ShopState {
+  const parsed = read<Record<string, unknown>>(SHOP_KEY);
+  if (!parsed || typeof parsed !== 'object') return emptyShop();
+
+  // Ids are checked against the catalogue on read, so a renamed or removed item
+  // cannot leave an unspendable entry or an unresolvable equip behind.
+  // A multiset, not a set: a repeatable upgrade is held once per purchase, and the
+  // count is what `freezeSlots` reads. Capped per item so a hand-edited record cannot
+  // grant more than the shop would sell.
+  const owned: string[] = [];
+  if (Array.isArray(parsed.owned)) {
+    const counts = new Map<string, number>();
+    for (const v of parsed.owned) {
+      if (typeof v !== 'string') continue;
+      const item = itemById(v);
+      if (!item || item.consumable) continue;
+      const held = counts.get(v) ?? 0;
+      if (held >= (item.maxOwned ?? 1)) continue;
+      counts.set(v, held + 1);
+      owned.push(v);
+    }
+  }
+
+  const stock: Record<string, number> = {};
+  if (parsed.stock && typeof parsed.stock === 'object') {
+    for (const [id, v] of Object.entries(parsed.stock as Record<string, unknown>)) {
+      const item = itemById(id);
+      if (!item?.consumable) continue;
+      if (!isFiniteNum(v) || v <= 0) continue;
+      stock[id] = Math.min(item.stackLimit ?? 1, Math.floor(v));
+    }
+  }
+
+  const equipped: ShopState['equipped'] = {};
+  if (parsed.equipped && typeof parsed.equipped === 'object') {
+    for (const [slot, id] of Object.entries(parsed.equipped as Record<string, unknown>)) {
+      if (typeof id !== 'string' || !owned.includes(id)) continue;
+      const item = itemById(id);
+      if (item?.slot !== slot) continue;
+      equipped[item.slot] = id;
+    }
+  }
+
+  const rerolls: Record<string, number> = {};
+  if (parsed.rerolls && typeof parsed.rerolls === 'object') {
+    for (const [week, v] of Object.entries(parsed.rerolls as Record<string, unknown>)) {
+      if (isDateKey(week) && isFiniteNum(v) && v > 0) rerolls[week] = Math.floor(v);
+    }
+  }
+
+  return {
+    owned,
+    stock,
+    equipped,
+    boostedDates: Array.isArray(parsed.boostedDates)
+      ? parsed.boostedDates.filter(isDateKey).slice(-60)
+      : [],
+    rerolls,
+  };
+}
+
+export function saveShop(shop: ShopState): void {
+  write(SHOP_KEY, shop);
 }
 
 // ---------------------------------------------------------------------------

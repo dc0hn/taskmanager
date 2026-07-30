@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, TriangleAlert } from 'lucide-react';
-import type { CategoryDef, MonthlyGoalSummary, MonthRecord } from '../types';
+import type {
+  CategoryDef,
+  DayMarkDef,
+  DayMarks,
+  MonthlyGoalSummary,
+  MonthRecord,
+} from '../types';
+import { countMarksInMonth, describeMarks } from '../daymarks';
 import { formatMonthKey, formatRatio } from '../month';
 import { colorsFor, resolveCategory } from '../utils/color';
 import { formatDuration } from '../utils/time';
@@ -26,9 +33,22 @@ interface Props {
   /** Which key is the month currently running. */
   currentMonth: string;
   categories: CategoryDef[];
+  /**
+   * Day marks are counted live rather than stored in the record. They live in one
+   * store that is never pruned, so deriving them keeps a correction made today
+   * from disagreeing with a month sealed last year.
+   */
+  marks: DayMarks;
+  markDefs: DayMarkDef[];
 }
 
-export default function MonthsView({ months, currentMonth, categories }: Props) {
+export default function MonthsView({
+  months,
+  currentMonth,
+  categories,
+  marks,
+  markDefs,
+}: Props) {
   const [open, setOpen] = useState<string | null>(currentMonth);
   const panel = usePanelMotion();
 
@@ -65,6 +85,8 @@ export default function MonthsView({ months, currentMonth, categories }: Props) 
                 index={i}
                 inProgress={m.month === currentMonth}
                 categories={categories}
+                markCounts={countMarksInMonth(marks, m.month)}
+                markDefs={markDefs}
                 expanded={open === m.month}
                 onToggle={() => setOpen(open === m.month ? null : m.month)}
               />
@@ -83,6 +105,8 @@ function MonthRow({
   index,
   inProgress,
   categories,
+  markCounts,
+  markDefs,
   expanded,
   onToggle,
 }: {
@@ -90,16 +114,23 @@ function MonthRow({
   index: number;
   inProgress: boolean;
   categories: CategoryDef[];
+  markCounts: Record<string, number>;
+  markDefs: DayMarkDef[];
   expanded: boolean;
   onToggle: () => void;
 }) {
   const kept = record.goals.filter((g) => g.ratio >= 1).length;
+  const markSummary = describeMarks(markCounts, markDefs);
+  const marked = [...markDefs]
+    .sort((a, b) => a.order - b.order)
+    .filter((d) => (markCounts[d.id] ?? 0) > 0);
 
   return (
     <div className="border-b border-rule-1">
       <button
         onClick={onToggle}
         aria-expanded={expanded}
+        title={markSummary || undefined}
         className="w-full flex items-center gap-4 py-4 text-left group"
       >
         <Ring
@@ -129,6 +160,22 @@ function MonthRow({
               : `${record.goals.length} goal${record.goals.length === 1 ? '' : 's'} · ${kept} kept pace · ${record.daysInMonth} days`}
             {record.cleared.length > 0 && ` · ${record.cleared.length} let go`}
           </div>
+
+          {marked.length > 0 && (
+            <div className="flex items-center gap-2.5 flex-wrap mt-1.5">
+              {marked.map((d) => (
+                <span key={d.id} className="flex items-center gap-1.5">
+                  <span
+                    className="rounded-full shrink-0"
+                    style={{ width: 7, height: 7, background: d.color }}
+                  />
+                  <span className="font-mono text-nano text-bone-2 tnum tracking-wide">
+                    {markCounts[d.id]} {d.label.toLowerCase()}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <ChevronRight

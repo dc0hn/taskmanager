@@ -153,6 +153,31 @@ export interface Block {
   pinned?: boolean;
   goalId?: string;
   templateId?: string;
+  /**
+   * Minutes since midnight OF THIS BLOCK'S DATE, recorded when it was ticked.
+   *
+   * Past midnight it keeps counting — ticking a Monday block at 00:30 on Tuesday
+   * stores 1470, not 30. Without that a block finished in the small hours would
+   * score as though it had been finished before breakfast.
+   *
+   * Absent on every block completed before this was introduced, so anything
+   * reading it must treat absence as "unknown", never as "late".
+   */
+  completedAt?: number;
+  /**
+   * Carried from the Task this block came from, so effort can be weighted after
+   * the fact. The scheduler still reads priority off the Task; this is a record of
+   * what that priority was, not an input to placing anything.
+   */
+  priority?: 'high' | 'normal';
+  /**
+   * How many times YOU moved this block — dragged it or sent it to another day.
+   *
+   * Deliberately not incremented by reflow displacement: one drag can push six
+   * blocks down, and counting those would mark all seven as rescheduled and make
+   * the number meaningless.
+   */
+  moves?: number;
 }
 
 export interface DayPlan {
@@ -360,6 +385,221 @@ export interface StreakInfo {
   /** True when today matches the rule and is already completed. */
   doneToday: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Day marks
+//
+// A whole-day quality — Travel, Gig, Off — as opposed to a category, which
+// describes a block of work. Deliberately its own taxonomy: putting "Gig" in the
+// intake category picker, the scheduler's kind system and the time-allotted
+// breakdown would be nonsense, because it is not time you spend, it is what the
+// day *is*.
+//
+// One mark per date. A split-cell indicator for multiple marks was considered and
+// rejected in favour of a single clean wash per day.
+// ---------------------------------------------------------------------------
+
+export interface DayMarkDef {
+  id: string;
+  label: string;
+  /** How the mark looks in Almanac; every other shade derives from it. */
+  color: string;
+  /**
+   * The colour this mark wears in the OTHER calendar, matched by hue on import.
+   *
+   * Separate from `color` because the source's palette is not Almanac's. A gig in
+   * Apple Calendar is amber, and amber here is the reserved signal colour — so the
+   * mark can read pink on screen while still recognising amber in a screenshot.
+   * Falls back to `color` when unset, which is right for a mark you never import.
+   */
+  sourceColor?: string;
+  order: number;
+}
+
+/** date key -> mark id. Absent means unmarked. */
+export type DayMarks = Record<string, string>;
+
+/**
+ * Two marks, not three, because two is what a touring schedule actually needs.
+ *
+ * The source colours are measured off a real Apple Calendar screenshot: travel
+ * events are teal (hue 173) and gig events amber (hue 33). Teal doubles as the
+ * display colour since nothing else here is teal, but gigs display pink — amber is
+ * the reserved signal, and a month of amber gig days would drown it.
+ */
+export const DEFAULT_DAY_MARKS: DayMarkDef[] = [
+  { id: 'travel', label: 'Travel', color: '#17a398', sourceColor: '#1f6058', order: 0 },
+  { id: 'gig', label: 'Gig', color: '#f472b6', sourceColor: '#654621', order: 1 },
+];
+
+// ---------------------------------------------------------------------------
+// Progression
+//
+// XP is a second reading of the same facts the calendar already records. Nothing
+// here is an input to scheduling; it is all derived from blocks and their
+// completion, which is what keeps it additive.
+// ---------------------------------------------------------------------------
+
+export type DisciplineId = 'focus' | 'endurance' | 'consistency' | 'planning' | 'insight';
+
+/** Lifetime standing. Only `brass` ever decreases. */
+export interface UserProgress {
+  /** Lifetime XP. Never spent, never falls. */
+  totalXp: number;
+  /** Spendable currency, minted alongside XP. This is the balance. */
+  brass: number;
+  /**
+   * Lifetime brass spent. Only ever rises, and only when something is bought.
+   *
+   * Lifetime *earned* is deliberately NOT stored: it is `brass + brassSpent`, so it
+   * cannot disagree with the balance. Storing it as its own accumulator meant a
+   * transient miscount could inflate it permanently — and one did, growing the
+   * figure by several hundred on every launch while the balance stayed correct.
+   */
+  brassSpent: number;
+  /** Date key the one-time history backfill ran; empty means it hasn't. */
+  backfilledOn: string;
+  /**
+   * XP accumulated by disciplines that are not derived from blocks.
+   *
+   * Planning and Insight come from one-off bonuses rather than from completed time,
+   * so there is nothing to recompute them from — they have to be banked. Focus and
+   * Endurance are derived from blocks and deliberately are NOT stored here, because a
+   * stored copy could disagree with the blocks it came from.
+   */
+  disciplines?: Partial<Record<DisciplineId, number>>;
+}
+
+/** One day's reckoning. Recomputed from the day's blocks, never accumulated. */
+export interface DailyStat {
+  date: string;
+  plannedMinutes: number;
+  doneMinutes: number;
+  xpEarned: number;
+  brassEarned: number;
+  /** Longest run of in-order completions that day. */
+  bestCombo: number;
+  cleared: boolean;
+  /** Blocks ticked that day. Needed to count achievements without keeping plans. */
+  completedCount: number;
+  /** Completed minutes in focus-kind categories. */
+  focusMinutes: number;
+}
+
+/** A single line of the day's ledger, for display. */
+export interface XpLine {
+  /** Block id, or a synthetic id for a day-level bonus. */
+  id: string;
+  label: string;
+  xp: number;
+  minutes: number;
+  /** Multipliers that applied, already folded into `xp`. */
+  notes: string[];
+}
+
+/**
+ * What a resolved day did to the streak.
+ *
+ *   advanced  the threshold was met; the run grows
+ *   held      a travel or gig day, or a marked day you didn't finish — run keeps
+ *   neutral   nothing was planned, so there was nothing to fail
+ *   frozen    below the threshold, and a freeze absorbed it
+ *   reset     below the threshold with no freeze left — run starts again
+ *   open      today, still in play
+ *
+ * Four of the six keep the run and none of them is a failure state. That is the
+ * point: the only way to lose a run is a day you planned work, didn't do it, and
+ * had already spent your freeze.
+ */
+export type DayOutcome = 'advanced' | 'held' | 'neutral' | 'frozen' | 'reset' | 'open';
+
+export interface StreakState {
+  /** Days in the current run, not counting today. */
+  current: number;
+  longest: number;
+  /** Last date resolved. Everything up to and including this is settled. */
+  resolvedThrough: string;
+  /** Freezes in hand. */
+  freezes: number;
+  /** How many freezes can be held at once. The shop can raise this. */
+  capacity: number;
+  /** Date the allowance last refilled. */
+  refilledOn: string;
+  /** Dates a freeze was spent on, newest last. */
+  frozenDates: string[];
+  /** Date the current run began. */
+  startedOn: string;
+  /** Date of the most recent reset, or empty if never. */
+  lastResetOn: string;
+  /** XP the Consistency discipline has accumulated from kept days. */
+  consistencyXp: number;
+}
+
+/**
+ * One-off awards already granted, by key.
+ *
+ * A flat set of strings rather than a field per award, because one-off grants are
+ * exactly the shape that drifts: pay a comeback bonus twice and the total is wrong
+ * forever with no way to tell. Checking a key before granting makes every one of
+ * them idempotent, and achievements will use the same ledger.
+ */
+export interface AwardLedger {
+  granted: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Badges
+// ---------------------------------------------------------------------------
+
+export type BadgeGroup = 'milestone' | 'behaviour' | 'effort';
+
+export interface BadgeDef {
+  id: string;
+  name: string;
+  /** What it took. Shown once unlocked, and for visible badges before that too. */
+  description: string;
+  group: BadgeGroup;
+  /**
+   * Hidden badges show as a sealed slot until earned.
+   *
+   * Reserved for the surprising ones. A hidden milestone would just be a missing
+   * signpost, but a hidden behavioural badge is a small discovery — and knowing in
+   * advance that finishing something before 9am pays would turn it into a chore.
+   */
+  hidden?: boolean;
+  xp: number;
+  /** Pixel glyph index, 0..7, drawn from the sigil set. */
+  glyph: number;
+  /** For badges that count up, so progress can be shown. */
+  target?: number;
+  /**
+   * Badges on the same ladder render as one tile with a staged meter.
+   *
+   * Four near-identical "complete N blocks" cards taught the eye to skip that whole
+   * region of the shelf. One tile showing 1 → 10 → 50 → 250 says the same thing and
+   * reads as a single climbing thing rather than four separate ones.
+   */
+  ladder?: string;
+  /** Rung name shown on a ladder tile, e.g. "50". */
+  rung?: string;
+}
+
+export interface DisciplineDef {
+  id: DisciplineId;
+  label: string;
+  /** What it measures, in one line. */
+  blurb: string;
+  /** False until the feature that feeds it exists. */
+  live: boolean;
+}
+
+export const DISCIPLINES: DisciplineDef[] = [
+  { id: 'focus', label: 'Focus', blurb: 'Deep work completed', live: true },
+  { id: 'endurance', label: 'Endurance', blurb: 'Long blocks seen through', live: true },
+  { id: 'consistency', label: 'Consistency', blurb: 'Streaks kept', live: true },
+  { id: 'planning', label: 'Planning', blurb: 'Days built before they arrive', live: true },
+  { id: 'insight', label: 'Insight', blurb: 'What you have learned about yourself', live: true },
+];
 
 // ---------------------------------------------------------------------------
 // Settings

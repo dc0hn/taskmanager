@@ -1,6 +1,6 @@
 import { memo } from 'react';
-import { ArrowLeft, ArrowRight, Plus, RotateCcw } from 'lucide-react';
-import type { ViewMode } from '../types';
+import { ArrowLeft, ArrowRight, Plus, RotateCcw, Scan } from 'lucide-react';
+import type { DayMarkDef, ViewMode } from '../types';
 import { fromDateKey, toDateKey } from '../utils/time';
 import { formatMonthLong, formatWeekRangeLong } from '../week';
 
@@ -19,6 +19,12 @@ interface Props {
   /** Shown only when there is something incomplete to reflow. */
   canReplan: boolean;
   onRebuildFromNow: () => void;
+  /** Only supplied in month view — the importer reads a whole month at a time. */
+  onImportMarks?: () => void;
+  /** e.g. "4 travel · 2 gig", for the month currently shown. */
+  markSummary?: string;
+  /** The mark on the day currently shown, for the day-view ribbon. */
+  dayMark?: DayMarkDef | null;
 }
 
 const VIEWS: { key: ViewMode; label: string }[] = [
@@ -37,6 +43,9 @@ function Toolbar({
   onAdd,
   canReplan,
   onRebuildFromNow,
+  onImportMarks,
+  markSummary = '',
+  dayMark = null,
 }: Props) {
   const d = fromDateKey(date);
   const isToday = date === toDateKey(new Date());
@@ -66,6 +75,9 @@ function Toolbar({
         <span className="legend">
           {view === 'day' ? 'Daily sheet' : view === 'week' ? 'Weekly table' : 'Monthly index'}
         </span>
+        {/* The month's marks belong in the running head, not the toolbar: they
+            describe the page, they are not an action on it. */}
+        {markSummary && <span className="legend text-bone-2 tnum">{markSummary}</span>}
         <span className="flex-1 rule-h" />
         <span className="legend tnum">
           {view === 'day' ? `No.${String(dayOfYear(d)).padStart(3, '0')}` : ''}
@@ -79,12 +91,42 @@ function Toolbar({
           <h1 className="font-display text-bone-0 text-display-sm sm:text-display truncate">
             {title}
           </h1>
-          <p className="mt-2 font-mono text-nano text-bone-3 tracking-legend uppercase tnum">
-            {subtitle}
-          </p>
+          <div className="mt-2 flex items-center gap-3 flex-wrap">
+            <p className="font-mono text-nano text-bone-3 tracking-legend uppercase tnum">
+              {subtitle}
+            </p>
+            {/* Day-view ribbon. Reading the mark off the month grid means leaving
+                the sheet, so it is restated here where the work happens. */}
+            {view === 'day' && dayMark && (
+              <span
+                className="legend inline-flex items-center gap-1.5 px-2 py-[2px] rounded-xs"
+                style={{
+                  background: `color-mix(in srgb, ${dayMark.color} 16%, transparent)`,
+                  color: dayMark.color,
+                }}
+              >
+                <span
+                  className="rounded-full shrink-0"
+                  style={{ width: 6, height: 6, background: dayMark.color }}
+                />
+                {dayMark.label}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2 no-drag flex-wrap">
+          {onImportMarks && (
+            <button
+              onClick={onImportMarks}
+              title="Read travel and gig days off a screenshot of another calendar. Nothing leaves this machine."
+              className="btn-quiet inline-flex items-center gap-2 text-body-sm px-3 h-8"
+            >
+              <Scan size={13} strokeWidth={2} />
+              Import marks
+            </button>
+          )}
+
           {canReplan && (
             <button
               onClick={onRebuildFromNow}

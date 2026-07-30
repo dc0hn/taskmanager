@@ -1,8 +1,17 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronUp, Lock, Plus, Tag, Trash2 } from 'lucide-react';
-import type { CategoryDef, CategoryKind } from '../types';
+import {
+  ChevronDown,
+  ChevronUp,
+  Lock,
+  Plus,
+  Tag,
+  TriangleAlert,
+  Trash2,
+} from 'lucide-react';
+import type { CategoryDef, CategoryKind, DayMarkDef, DayMarks } from '../types';
 import { CATEGORY_KINDS, CATEGORY_SWATCHES } from '../types';
+import { hueCollisions, orphanedMarks } from '../daymarks';
 import { colorsFor, slugifyCategoryId } from '../utils/color';
 
 // ============================================================================
@@ -26,6 +35,10 @@ interface Props {
   onUpdate: (id: string, patch: Partial<CategoryDef>) => void;
   onRemove: (id: string) => void;
   onReorder: (id: string, direction: -1 | 1) => void;
+  /** Day marks — travel, gig, and whatever else describes a whole day. */
+  markDefs: DayMarkDef[];
+  marks: DayMarks;
+  onChangeMarkDefs: (defs: DayMarkDef[]) => void;
 }
 
 export default function CategoriesView({
@@ -35,6 +48,9 @@ export default function CategoriesView({
   onUpdate,
   onRemove,
   onReorder,
+  markDefs,
+  marks,
+  onChangeMarkDefs,
 }: Props) {
   const [adding, setAdding] = useState(false);
   const sorted = [...categories].sort((a, b) => a.order - b.order);
@@ -96,7 +112,367 @@ export default function CategoriesView({
             />
           ))}
         </div>
+
+        <DayMarksSection
+          defs={markDefs}
+          marks={marks}
+          onChange={onChangeMarkDefs}
+        />
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Day marks
+//
+// A separate list from categories on purpose. A category answers "what kind of
+// work is this block", a day mark answers "what kind of day is this" — they sit
+// at different scales, and merging them would put "Travel" in the block picker
+// where it means nothing.
+//
+// Colour is load-bearing here in a way it isn't for categories: the importer
+// matches screenshot pixels by HUE, so two marks with neighbouring hues cannot be
+// told apart and the section says so rather than letting the import silently
+// guess.
+// ---------------------------------------------------------------------------
+
+function DayMarksSection({
+  defs,
+  marks,
+  onChange,
+}: {
+  defs: DayMarkDef[];
+  marks: DayMarks;
+  onChange: (defs: DayMarkDef[]) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const sorted = useMemo(() => [...defs].sort((a, b) => a.order - b.order), [defs]);
+
+  const usage = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const id of Object.values(marks)) out[id] = (out[id] ?? 0) + 1;
+    return out;
+  }, [marks]);
+
+  const orphans = useMemo(() => orphanedMarks(marks, defs), [marks, defs]);
+
+  /** Pairs whose hues are too close for the screenshot sampler to separate. */
+  const collisions = useMemo(
+    () => hueCollisions(defs).map(([a, b]) => `${a.label} and ${b.label}`),
+    [defs]
+  );
+
+  const takenIds = sorted.map((d) => d.id);
+
+  return (
+    <div className="mt-10 pt-6 border-t border-rule-2">
+      <div className="flex items-center gap-2 pb-4">
+        <div>
+          <h2 className="text-[15px] font-semibold text-ink-0">Day marks</h2>
+          <p className="text-[12px] text-ink-3 mt-0.5 max-w-[60ch] leading-relaxed">
+            Whole-day labels — travel, a gig, a day off. They wash the day in month
+            view and never appear on a block. Colour matters: the screenshot importer
+            matches by hue, so give each mark a clearly different one.
+          </p>
+        </div>
+        <div className="flex-1" />
+        <button
+          onClick={() => setAdding((v) => !v)}
+          className="btn-primary inline-flex items-center gap-1.5 text-[12.5px] font-semibold px-3 h-[30px] rounded-lg shrink-0"
+        >
+          <Plus size={14} strokeWidth={2.4} />
+          New mark
+        </button>
+      </div>
+
+      {collisions.length > 0 && (
+        <div
+          className="flex items-start gap-2 mb-3 px-3 py-2 rounded-md"
+          style={{ background: 'rgba(255,176,31,0.09)' }}
+        >
+          <TriangleAlert size={13} strokeWidth={2} className="text-signal shrink-0 mt-[2px]" />
+          <p className="text-[12px] text-bone-2 leading-relaxed">
+            {collisions.join('; ')} sit too close on the colour wheel. Marking days by
+            hand still works, but the importer will not reliably tell them apart.
+          </p>
+        </div>
+      )}
+
+      {orphans.length > 0 && (
+        <div
+          className="flex items-start gap-2 mb-3 px-3 py-2 rounded-md"
+          style={{ background: 'rgba(255,176,31,0.09)' }}
+        >
+          <TriangleAlert size={13} strokeWidth={2} className="text-signal shrink-0 mt-[2px]" />
+          <p className="text-[12px] text-bone-2 leading-relaxed">
+            {orphans.length} day{orphans.length === 1 ? '' : 's'}{' '}
+            {orphans.length === 1 ? 'still points' : 'still point'} at a mark that no
+            longer exists ({orphans.slice(0, 3).join(', ')}
+            {orphans.length > 3 ? '…' : ''}).{' '}
+            {orphans.length === 1 ? 'It draws' : 'They draw'} as unmarked — click the dot
+            on those days in month view to clear or reassign them.
+          </p>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {adding && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+            className="overflow-hidden"
+          >
+            <MarkForm
+              taken={takenIds}
+              takenLabels={sorted.map((d) => d.label.trim().toLowerCase())}
+              nextOrder={sorted.length}
+              onSubmit={(d) => {
+                onChange([...defs, d]);
+                setAdding(false);
+              }}
+              onCancel={() => setAdding(false)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="space-y-2">
+        {sorted.length === 0 ? (
+          <p className="text-[12px] text-ink-3 py-2 leading-relaxed">
+            No day marks. Without at least one there is nothing for the importer to
+            match, and the dot in month view has nothing to cycle through.
+          </p>
+        ) : (
+          sorted.map((def, i) => (
+            <MarkRow
+              key={def.id}
+              def={def}
+              usage={usage[def.id] ?? 0}
+              isFirst={i === 0}
+              isLast={i === sorted.length - 1}
+              onUpdate={(patch) =>
+                onChange(defs.map((d) => (d.id === def.id ? { ...d, ...patch } : d)))
+              }
+              onRemove={() => onChange(defs.filter((d) => d.id !== def.id))}
+              onReorder={(dir) => {
+                const next = [...sorted];
+                const j = i + dir;
+                if (j < 0 || j >= next.length) return;
+                [next[i], next[j]] = [next[j], next[i]];
+                onChange(next.map((d, idx) => ({ ...d, order: idx })));
+              }}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MarkRow({
+  def,
+  usage,
+  isFirst,
+  isLast,
+  onUpdate,
+  onRemove,
+  onReorder,
+}: {
+  def: DayMarkDef;
+  usage: number;
+  isFirst: boolean;
+  isLast: boolean;
+  onUpdate: (patch: Partial<DayMarkDef>) => void;
+  onRemove: () => void;
+  onReorder: (dir: -1 | 1) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <div className="ruled-row">
+      <div className="flex items-center gap-3 flex-wrap">
+        {/* How a marked day will read in month view. */}
+        <div
+          className="rounded-lg px-2.5 py-2 shrink-0 w-[112px] relative overflow-hidden"
+          style={{
+            background: `color-mix(in srgb, ${def.color} 15%, var(--chassis-1))`,
+          }}
+        >
+          <span
+            className="absolute left-0 top-0 bottom-0"
+            style={{ width: 2, background: def.color }}
+          />
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="font-mono text-[11px] tnum text-bone-1">14</span>
+            <span
+              className="rounded-full shrink-0"
+              style={{ width: 8, height: 8, background: def.color }}
+            />
+          </div>
+          <div className="text-[11px] font-medium truncate mt-1" style={{ color: def.color }}>
+            {def.label}
+          </div>
+        </div>
+
+        <div className="flex-1 min-w-[200px]">
+          <input
+            value={def.label}
+            onChange={(e) => onUpdate({ label: e.target.value })}
+            aria-label="Mark name"
+            className="w-full bg-transparent text-[13px] font-semibold text-ink-0 outline-none border-b border-transparent focus:border-rule-3 pb-0.5"
+          />
+          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+            {CATEGORY_SWATCHES.map((hex) => (
+              <button
+                key={hex}
+                onClick={() => onUpdate({ color: hex })}
+                aria-label={`Set colour ${hex}`}
+                className="rounded-full transition-transform hover:scale-110"
+                style={{
+                  width: 16,
+                  height: 16,
+                  background: hex,
+                  outline: def.color === hex ? '2px solid var(--bone-0)' : 'none',
+                  outlineOffset: 2,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="font-mono text-nano text-bone-3 tnum mr-2">
+            {usage === 0 ? 'unused' : `${usage} day${usage === 1 ? '' : 's'}`}
+          </span>
+          <button
+            onClick={() => onReorder(-1)}
+            disabled={isFirst}
+            aria-label="Move up"
+            className="grid place-items-center w-6 h-6 rounded text-bone-3 hover:text-bone-0 disabled:opacity-25"
+          >
+            <ChevronUp size={13} strokeWidth={2} />
+          </button>
+          <button
+            onClick={() => onReorder(1)}
+            disabled={isLast}
+            aria-label="Move down"
+            className="grid place-items-center w-6 h-6 rounded text-bone-3 hover:text-bone-0 disabled:opacity-25"
+          >
+            <ChevronDown size={13} strokeWidth={2} />
+          </button>
+          <button
+            onClick={() => (confirming ? onRemove() : setConfirming(true))}
+            onBlur={() => setConfirming(false)}
+            aria-label={confirming ? 'Confirm delete' : 'Delete mark'}
+            className="grid place-items-center w-6 h-6 rounded transition-colors"
+            style={{ color: confirming ? 'var(--bad)' : 'var(--bone-3)' }}
+            title={
+              usage > 0
+                ? `${usage} day${usage === 1 ? '' : 's'} use this. They will draw as unmarked until reassigned.`
+                : 'Delete'
+            }
+          >
+            <Trash2 size={13} strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+      {confirming && (
+        <p className="text-[11px] text-bone-2 mt-2">
+          {usage > 0
+            ? `Click again to delete. ${usage} day${usage === 1 ? '' : 's'} reference this mark and will show as unmarked.`
+            : 'Click again to delete.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MarkForm({
+  taken,
+  takenLabels,
+  nextOrder,
+  onSubmit,
+  onCancel,
+}: {
+  /** Existing ids and labels, so a new mark can't shadow one. */
+  taken: string[];
+  takenLabels: string[];
+  nextOrder: number;
+  onSubmit: (d: DayMarkDef) => void;
+  onCancel: () => void;
+}) {
+  const [label, setLabel] = useState('');
+  const [color, setColor] = useState(CATEGORY_SWATCHES[4]);
+
+  // The slug suffixes itself past a collision, so the id is always safe; the only
+  // real hazard is two marks reading identically in the UI.
+  const id = slugifyCategoryId(label, taken);
+  const clash = takenLabels.includes(label.trim().toLowerCase());
+  const valid = label.trim().length > 0 && !clash;
+
+  return (
+    <div className="form-well mb-3">
+      <div className="flex items-end gap-3 flex-wrap">
+        <label className="flex-1 min-w-[200px]">
+          <span className="legend block mb-1.5">Name</span>
+          <input
+            autoFocus
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && valid) {
+                onSubmit({ id, label: label.trim(), color, order: nextOrder });
+              }
+              if (e.key === 'Escape') onCancel();
+            }}
+            placeholder="Travel, Gig, Off…"
+            className="w-full bg-chassis-1 border border-rule-2 rounded px-2.5 h-8 text-[13px] text-ink-0 outline-none focus:border-rule-3"
+          />
+        </label>
+
+        <div>
+          <span className="legend block mb-1.5">Colour</span>
+          <div className="flex items-center gap-1.5 h-8">
+            {CATEGORY_SWATCHES.map((hex) => (
+              <button
+                key={hex}
+                onClick={() => setColor(hex)}
+                aria-label={`Colour ${hex}`}
+                className="rounded-full transition-transform hover:scale-110"
+                style={{
+                  width: 18,
+                  height: 18,
+                  background: hex,
+                  outline: color === hex ? '2px solid var(--bone-0)' : 'none',
+                  outlineOffset: 2,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={onCancel} className="btn-quiet text-[12.5px] px-3 h-8">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit({ id, label: label.trim(), color, order: nextOrder })}
+            disabled={!valid}
+            className="btn-primary text-[12.5px] font-semibold px-3 h-8 disabled:opacity-40"
+          >
+            Add mark
+          </button>
+        </div>
+      </div>
+      {clash && (
+        <p className="text-[11.5px] mt-2" style={{ color: 'var(--bad)' }}>
+          A mark called that already exists — two identical labels would be
+          indistinguishable in the month grid.
+        </p>
+      )}
     </div>
   );
 }

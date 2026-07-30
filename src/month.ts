@@ -55,6 +55,25 @@ export function daysInMonth(monthKey: string): number {
   return new Date(year, month, 0).getDate();
 }
 
+/**
+ * A month with no goal history at all.
+ *
+ * Used for a month that exists in the record only because something else in it is
+ * worth counting — day marks, so far. `overall` is 0 against no goals, which the
+ * view renders as an empty ring rather than a failure, and `sealedOn` stays empty
+ * so nothing mistakes this for a real seal.
+ */
+export function emptyMonthRecord(monthKey: string): MonthRecord {
+  return {
+    month: monthKey,
+    daysInMonth: daysInMonth(monthKey),
+    sealedOn: '',
+    goals: [],
+    cleared: [],
+    overall: 0,
+  };
+}
+
 export function addMonthKeys(monthKey: string, n: number): string {
   const { year, month } = monthYear(monthKey);
   const d = new Date(year, month - 1 + n, 1);
