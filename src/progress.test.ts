@@ -57,9 +57,16 @@ describe('the level curve', () => {
   it('rises linearly across a cycle', () => {
     // Zero-indexed: level 0 is where a fresh account starts, and costs the least.
     expect(xpForLevel(0)).toBe(60);
-    expect(xpForLevel(1)).toBe(63);
-    expect(xpForLevel(29)).toBe(147);
-    expect(xpForLevel(59)).toBe(237);
+    expect(xpForLevel(1)).toBe(69);
+    expect(xpForLevel(29)).toBe(321);
+    expect(xpForLevel(59)).toBe(591);
+  });
+
+  it('makes the last level nearly ten times the first', () => {
+    // The slope was 3, which left level 59 costing only four times level 0 — the back half
+    // of a cycle was no harder than the front, and a measured six-hour day cleared the
+    // whole thing in sixteen days.
+    expect(xpForLevel(59) / xpForLevel(0)).toBeGreaterThan(9);
   });
 
   it('clamps outside the cycle rather than extrapolating', () => {
@@ -67,14 +74,18 @@ describe('the level curve', () => {
     expect(xpForLevel(-5)).toBe(xpForLevel(0));
   });
 
-  it('costs 8,910 XP for a full 60-level cycle', () => {
-    // The number the whole pace was calibrated against: ~37 days at ~240/day.
-    expect(CYCLE_XP).toBe(8910);
+  it('costs 19,530 XP for a full 60-level cycle', () => {
+    // Measured rather than assumed: a solid six-hour day earns ~497 XP of repeatable work,
+    // which puts this near 34 days at that pace and about eight weeks at a lighter one.
+    expect(CYCLE_XP).toBe(19530);
   });
 
   it('is cheap enough at the start to level on the first day', () => {
-    // A first day of real work should cross several levels, not almost one.
-    expect(xpToReachLevel(3)).toBeLessThan(200);
+    // A first day of real work should cross several levels, not almost one. The steeper
+    // slope is meant to bite late, not at the beginning — a ~497 XP day still reaches
+    // level 5.
+    expect(xpToReachLevel(3)).toBeLessThan(250);
+    expect(xpToReachLevel(5)).toBeLessThan(500);
   });
 
   it('has exactly one rank name per level', () => {
@@ -172,7 +183,7 @@ describe('xpToNextLevel', () => {
   it('counts down to the boundary', () => {
     expect(xpToNextLevel(0)).toBe(60);
     expect(xpToNextLevel(59)).toBe(1);
-    expect(xpToNextLevel(60)).toBe(63);
+    expect(xpToNextLevel(60)).toBe(69);
   });
 });
 
@@ -191,7 +202,7 @@ describe('levelsCrossed', () => {
   it('reports every level of a generous day, not just the last', () => {
     // The reason this returns a list: a good day can cross three, and a swallowed
     // level-up is a reward silently lost.
-    const crossed = levelsCrossed(0, 200);
+    const crossed = levelsCrossed(0, 270);
     expect(crossed.map((s) => s.level)).toEqual([1, 2, 3]);
   });
 

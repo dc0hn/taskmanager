@@ -46,9 +46,18 @@ import { addDays } from './utils/time';
 /**
  * XP per completed minute, before weights.
  *
- * Calibrated backwards from the intended pace: a 60-level cycle costs 8,910 XP,
- * a normal day completes ~300 minutes at an average weight near 1.4, and a cycle
- * should land around 37 days without bonuses. 0.55 puts that at ~231 XP/day.
+ * This was calibrated backwards from an intended pace of ~231 XP/day, assuming a 300-minute
+ * day at "an average weight near 1.4". Both halves of that were optimistic, and it is worth
+ * writing down rather than quietly leaving wrong:
+ *
+ *   THE WEIGHTS COMPOUND. focus 1.6 x priority 1.4 x on-time 1.15 x combo 1.5 is 3.86, so a
+ *   good block earns 2.13 XP/min rather than the 0.77 the arithmetic assumed. A measured
+ *   six-hour day comes to ~497 XP of repeatable work, better than twice the estimate.
+ *
+ * The rate itself is left alone. Capping the compounding was modelled and moves a normal
+ * day by under thirty XP — an ordinary day never reaches full stack, because the combo
+ * builds gradually and only one block is usually high priority. The level curve was the
+ * honest lever, and that is where the correction went; see `xpForLevel`.
  */
 export const XP_PER_MINUTE = 0.55;
 
@@ -117,11 +126,22 @@ export const LEVELS_PER_CYCLE = 60;
  *
  * Levels are zero-indexed: you begin at level 0 with nothing earned, which is what
  * "starting from scratch" should actually read as. Linear so the pace stays legible —
- * level 0 costs 60, level 59 costs 237, and the whole cycle is a month's honest work.
+ * level 0 costs 60, level 59 costs 591, and the whole cycle is about five weeks of real
+ * work.
+ *
+ * THE SLOPE WAS 3 AND IT WAS FAR TOO SHALLOW. Measured against actual play: a solid
+ * six-hour day earns ~497 XP of repeatable work, which put a full 60-level cycle at
+ * SIXTEEN days against the ~37 this file was calibrated for, and a first day at level 15.
+ * The old curve also barely rose — level 59 cost only four times level 0, so the back half
+ * of a cycle was no harder than the front.
+ *
+ * At 9 the cycle costs 19,530 and lands near 34 days at six hours a day, or eight weeks at
+ * a lighter pace. Early levels stay cheap enough that a first day still crosses several,
+ * which is the part worth keeping.
  */
 export function xpForLevel(n: number): number {
   const clamped = Math.min(Math.max(0, Math.round(n)), LEVELS_PER_CYCLE - 1);
-  return 60 + 3 * clamped;
+  return 60 + 9 * clamped;
 }
 
 /** XP to go from the start of a cycle to the start of level n. */
