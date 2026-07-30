@@ -1,6 +1,7 @@
 import type { AwardLedger, Block, CategoryDef, DailyStat, DayPlan } from './types';
 import { UNKNOWN_CATEGORY } from './types';
 import { scorable, wasOnTime } from './progress';
+import { weekdayOf } from './week';
 
 // ============================================================================
 // The codex — what the calendar has learned about you
@@ -300,7 +301,7 @@ export const INSIGHTS: InsightRule[] = [
       const byDow = Array.from({ length: 7 }, () => ({ planned: 0, done: 0, days: 0 }));
       for (const [date, stat] of Object.entries(c.stats)) {
         if (stat.plannedMinutes <= 0) continue;
-        const dow = new Date(`${date}T00:00:00`).getDay();
+        const dow = weekdayOf(date);
         byDow[dow].planned += stat.plannedMinutes;
         byDow[dow].done += stat.doneMinutes;
         byDow[dow].days += 1;

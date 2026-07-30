@@ -10,6 +10,7 @@ import type {
   WeekRecord,
 } from './types';
 import { scorable, xpForBlock } from './progress';
+import { todayQualifies } from './streaks';
 import { markById } from './daymarks';
 import { matchesRule } from './recurrence';
 import { weekDates } from './week';
@@ -527,11 +528,12 @@ export const WEEKLY_CHALLENGES: ChallengeSpec[] = [
     name: 'Five days kept',
     blurb: 'Meet the daily threshold on five days',
     total: 5,
-    done: (c) =>
-      c.dates.filter((d) => {
-        const s = c.stats[d];
-        return s != null && s.plannedMinutes > 0 && s.doneMinutes / s.plannedMinutes >= 0.6;
-      }).length,
+    // Deliberately the same predicate the run counter uses, rather than a local copy
+    // of the arithmetic. The copy that used to live here read the threshold as a bare
+    // 0.6 and ignored day marks, so a travel day counted as kept by the streak and
+    // not kept by this quest — two answers to "did I meet the threshold today", one
+    // of which the blurb was promising.
+    done: (c) => c.dates.filter((d) => todayQualifies(c.stats[d], c.marks[d] != null)).length,
   },
   {
     id: 'xp-1200',

@@ -516,6 +516,12 @@ export function reconcileDay(
   const xpDelta = fresh.xpEarned - (previous?.xpEarned ?? 0);
   const brassDelta = fresh.brassEarned - (previous?.brassEarned ?? 0);
 
+  // `|| 0` normalises negative zero, which `Math.max` produces when nothing has been
+  // spent and the delta is negative. It compares equal to zero but does not print or
+  // serialise like it.
+  const nextBrass =
+    Math.max(-(progress.brassSpent ?? 0), progress.brass + brassDelta) || 0;
+
   const same =
     previous != null &&
     previous.xpEarned === fresh.xpEarned &&
@@ -540,7 +546,20 @@ export function reconcileDay(
       // Clamped at zero: un-ticking the only completed block of the very first day
       // must not drive a lifetime total negative.
       totalXp: Math.max(0, progress.totalXp + xpDelta),
-      brass: Math.max(0, progress.brass + brassDelta),
+      // The brass balance is allowed to go NEGATIVE, and it has to be.
+      //
+      // Lifetime earnings are derived as `brass + brassSpent`, so clamping the balance
+      // at zero forgave any shortfall and left the lifetime figure holding brass that
+      // no longer had a day behind it. Earn 14, spend 14, un-tick the block: the
+      // balance clamped to 0 instead of -14, so the lifetime figure still read 14. Tick
+      // the same block again and it minted a second time — one block, spendable
+      // repeatedly, and a lifetime total climbing with every cycle.
+      //
+      // A negative balance simply means more has been spent than the surviving work
+      // earned. Nothing is affordable until it is back above the price, which is the
+      // honest consequence of deleting the work that paid for a purchase. The floor is
+      // where lifetime earnings hit zero, since those genuinely cannot go below it.
+      brass: nextBrass,
     },
     stats: nextStats,
     changed: true,

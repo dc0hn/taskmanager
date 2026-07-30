@@ -11,6 +11,7 @@ import type {
 import { UNKNOWN_CATEGORY } from './types';
 import { scorable, standingFor } from './progress';
 import { STREAK_THRESHOLD, daysBetween, shiftDay, todayQualifies } from './streaks';
+import { weekdayOf } from './week';
 
 // ============================================================================
 // Badges
@@ -461,7 +462,7 @@ export function weekdayRun(
   let run = 0;
   for (let i = 1; i <= maxLookback; i++) {
     const date = shiftDay(today, -i);
-    const dow = new Date(`${date}T00:00:00`).getDay();
+    const dow = weekdayOf(date);
     if (dow === 0 || dow === 6) continue;
     if (todayQualifies(stats[date], marks[date] != null, STREAK_THRESHOLD)) run++;
     else break;

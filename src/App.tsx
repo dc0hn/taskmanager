@@ -414,6 +414,20 @@ export default function App() {
   useEffect(() => saveHabits(habits), [habits]);
   useEffect(() => saveDayMarkDefs(markDefs), [markDefs]);
   useEffect(() => saveDayMarks(dayMarks), [dayMarks]);
+  // The ledger is written BEFORE the total it pays for, and the order is deliberate.
+  //
+  // Effects flush in declaration order, and there is no transaction across
+  // localStorage keys — the process could in principle die between two writes. Every
+  // other figure here is derived and self-heals: day stats and the XP total are
+  // recomputed from the blocks, so a half-written pair converges on the next launch.
+  // The award ledger is the one record that cannot be recomputed, and it is the one
+  // that decides whether a one-off award gets paid again.
+  //
+  // So: ledger first. Losing that write means the award is unrecorded and re-granted,
+  // paying the same XP twice, forever. Losing the progress write instead means the
+  // award is recorded as paid and its XP is missed once. A single missed badge beats a
+  // lifetime total that quietly climbs on every crash.
+  useEffect(() => saveAwards(awards), [awards]);
   useEffect(() => saveProgress(progress), [progress]);
   useEffect(() => {
     // The module owns the AudioContext, so the toggle has to reach it as well as
@@ -436,7 +450,6 @@ export default function App() {
   }, []);
   useEffect(() => saveDayStats(dayStats), [dayStats]);
   useEffect(() => saveStreak(streak), [streak]);
-  useEffect(() => saveAwards(awards), [awards]);
   useEffect(() => saveShop(shop), [shop]);
   useEffect(() => saveWeek(week), [week]);
 
@@ -681,6 +694,31 @@ export default function App() {
   const awardsRef = useRef(awards);
   awardsRef.current = awards;
 
+  /**
+   * Grant one-off awards and advance the ledger in the same step.
+   *
+   * Assigning the ref here is the whole point, and the reason is not obvious.
+   *
+   * Several effects grant in a single commit — one completion can finish a quest,
+   * unlock a badge and keep the run all at once. Each of them used to build its new
+   * ledger from `awardsRef.current`, which is only refreshed on render, so every
+   * effect in the flush started from the same snapshot and produced a whole new
+   * ledger object. The last `setAwards` won, and the earlier effects' keys were
+   * simply gone — while their XP had already been paid. On the next launch those
+   * keys were due again, and paid a second time. A lifetime total that inflated by
+   * a badge here and a quest there, with nothing in the record to show why.
+   *
+   * Advancing the ref makes each grant visible to the next one in the same flush.
+   * It also makes a re-run harmless, which is what StrictMode does on mount.
+   */
+  const grantOnce = useCallback((keys: string[]): string[] => {
+    const { ledger, granted } = grantAwards(awardsRef.current, keys);
+    if (granted.length === 0) return [];
+    awardsRef.current = ledger;
+    setAwards(ledger);
+    return granted;
+  }, []);
+
   useEffect(() => {
     if (!progressRef.current.startedOn) return;
     const withCapacity = {
@@ -702,12 +740,11 @@ export default function App() {
     // One-off awards go through the ledger, so the same comeback can never be paid
     // twice however many times this effect runs.
     if (result.awards.length > 0 || result.brass > 0) {
-      const { ledger, granted } = grantAwards(awardsRef.current, result.awards);
+      const granted = grantOnce(result.awards);
       // Award XP only for keys that were genuinely new; kept-day brass is guarded by
       // `resolvedThrough` instead, since it is paid per day rather than per award.
       const xp = granted.length > 0 ? result.xp : 0;
       const brass = result.brass + Math.max(0, Math.round(xp * 0.1));
-      if (granted.length > 0) setAwards(ledger);
       if (xp > 0 || brass > 0) {
         setProgress((p) => ({ ...p, totalXp: p.totalXp + xp, brass: p.brass + brass }));
       }
@@ -754,9 +791,8 @@ export default function App() {
     }));
     const due = routineAwardsDue(awardsRef.current, runs);
     if (due.keys.length === 0) return;
-    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
+    const granted = grantOnce(due.keys);
     if (granted.length === 0) return;
-    setAwards(ledger);
     setProgress((p) => ({
       ...p,
       totalXp: p.totalXp + due.xp,
@@ -777,9 +813,7 @@ export default function App() {
   const payBonus = useCallback(
     (award: { keys: string[]; xp: number; disciplines: Partial<Record<DisciplineId, number>>; labels: string[] }) => {
       if (award.keys.length === 0) return;
-      const { ledger, granted } = grantAwards(awardsRef.current, award.keys);
-      if (granted.length === 0) return;
-      setAwards(ledger);
+      if (grantOnce(award.keys).length === 0) return;
       setProgress((p) => ({
         ...p,
         totalXp: p.totalXp + award.xp,
@@ -788,7 +822,7 @@ export default function App() {
       }));
       setToast(`${award.labels.join(' · ')} · +${award.xp} XP`);
     },
-    []
+    [grantOnce]
   );
 
   /**
@@ -830,9 +864,8 @@ export default function App() {
     const due = evaluateBadges(awardsRef.current, context);
     if (due.keys.length === 0) return;
 
-    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
+    const granted = grantOnce(due.keys);
     if (granted.length === 0) return;
-    setAwards(ledger);
 
     // Built by loop rather than filtered: `badgeById` returns the rule, which carries
     // a `test` function, and a type predicate narrowing to the plain def would be
@@ -1101,9 +1134,7 @@ export default function App() {
     const due = unlocksDue(awardsRef.current, insightContext);
     if (due.keys.length === 0) return;
 
-    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
-    if (granted.length === 0) return;
-    setAwards(ledger);
+    if (grantOnce(due.keys).length === 0) return;
     setProgress((p) => ({
       ...p,
       totalXp: p.totalXp + due.xp,
@@ -1233,9 +1264,7 @@ export default function App() {
     if (isRead(awardsRef.current, id)) return;
     const rule = insightById(id);
     if (!rule) return;
-    const { ledger, granted } = grantAwards(awardsRef.current, [readKey(id)]);
-    if (granted.length === 0) return;
-    setAwards(ledger);
+    if (grantOnce([readKey(id)]).length === 0) return;
     setProgress((p) => ({
       ...p,
       totalXp: p.totalXp + rule.xpRead,
@@ -1243,7 +1272,7 @@ export default function App() {
       disciplines: mergeDisciplines(p.disciplines ?? {}, { insight: rule.xpRead }),
     }));
     setToast(`${rule.name} — read. +${rule.xpRead} XP`);
-  }, []);
+  }, [grantOnce]);
 
   /**
    * Pay finished quests and challenges.
@@ -1259,9 +1288,7 @@ export default function App() {
     const due = questPayout(awardsRef.current, quests, [daily, weekly]);
     if (due.keys.length === 0) return;
 
-    const { ledger, granted } = grantAwards(awardsRef.current, due.keys);
-    if (granted.length === 0) return;
-    setAwards(ledger);
+    if (grantOnce(due.keys).length === 0) return;
     setProgress((p) => ({
       ...p,
       totalXp: p.totalXp + due.xp,

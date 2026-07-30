@@ -368,6 +368,47 @@ describe('the award ledger', () => {
     expect(hasAward({ granted: ['x'] }, 'x')).toBe(true);
     expect(hasAward({ granted: ['x'] }, 'y')).toBe(false);
   });
+
+  /**
+   * The reason `grantOnce` in App.tsx advances its ref instead of waiting for a
+   * render.
+   *
+   * A single completion can finish a quest, unlock a badge and keep the run in one
+   * commit, and each of those pays through a separate effect. Every ledger returned
+   * here is built from the snapshot it was handed — so two grants from the SAME
+   * snapshot each produce a complete ledger that knows nothing of the other, and
+   * whichever is stored last silently drops the other's keys. The XP was already
+   * paid, so the dropped keys come due again on the next launch and get paid twice.
+   *
+   * Grants must therefore chain: each one starts from the ledger the last produced.
+   */
+  it('loses keys when two grants share one snapshot', () => {
+    const base = emptyAwards();
+    const badge = grantAwards(base, ['badge:first-block']);
+    const quest = grantAwards(base, ['quest:two-deep']);
+
+    // Both look successful, and both are paid.
+    expect(badge.granted).toHaveLength(1);
+    expect(quest.granted).toHaveLength(1);
+
+    // But storing either one forgets the other.
+    expect(hasAward(quest.ledger, 'badge:first-block')).toBe(false);
+    expect(hasAward(badge.ledger, 'quest:two-deep')).toBe(false);
+
+    // And the forgotten key is due — and payable — all over again.
+    expect(grantAwards(quest.ledger, ['badge:first-block']).granted).toEqual([
+      'badge:first-block',
+    ]);
+  });
+
+  it('keeps both when the grants are chained', () => {
+    const badge = grantAwards(emptyAwards(), ['badge:first-block']);
+    const quest = grantAwards(badge.ledger, ['quest:two-deep']);
+
+    expect(quest.ledger.granted).toEqual(['badge:first-block', 'quest:two-deep']);
+    expect(grantAwards(quest.ledger, ['badge:first-block']).granted).toEqual([]);
+    expect(grantAwards(quest.ledger, ['quest:two-deep']).granted).toEqual([]);
+  });
 });
 
 describe('routineAwardsDue', () => {

@@ -873,3 +873,61 @@ describe('resetProgress', () => {
     expect(isScored('2026-07-30', reset.startedOn)).toBe(true);
   });
 });
+
+describe('the brass balance across a spend', () => {
+  const cats = DEFAULT_CATEGORIES;
+  const CAT = DEFAULT_CATEGORIES[0].id;
+
+  const one = (completed: boolean): Block =>
+    ({
+      id: 'b1',
+      title: 'Work',
+      start: 540,
+      end: 660,
+      category: CAT,
+      completed,
+      completedAt: completed ? 660 : undefined,
+    }) as Block;
+
+  it('cannot mint the same day twice by spending and un-ticking', () => {
+    // The exploit this closes, as a sequence: earn brass from one block, spend it all,
+    // un-tick the block, tick it again. While the balance clamped at zero the un-tick
+    // was forgiven, so the re-tick minted a second time — one block, spendable
+    // repeatedly, indefinitely.
+    let stats: Record<string, DailyStat> = {};
+    let p = { ...emptyProgress(), startedOn: '2026-07-30' };
+
+    const tick = reconcileDay(p, stats, '2026-07-30', [one(true)], cats);
+    p = tick.progress;
+    stats = tick.stats;
+    const minted = p.brass;
+    expect(minted).toBeGreaterThan(0);
+
+    // Spend the lot, as a purchase does.
+    p = { ...p, brass: 0, brassSpent: minted };
+    expect(brassEarned(p)).toBe(minted);
+
+    // Un-tick. The balance goes into the red, because the spend outlived the work.
+    const untick = reconcileDay(p, stats, '2026-07-30', [one(false)], cats);
+    p = untick.progress;
+    stats = untick.stats;
+    expect(p.brass).toBe(-minted);
+    // Lifetime earnings are back to nothing, which is the truth about the work done.
+    expect(brassEarned(p)).toBe(0);
+
+    // Re-tick. It pays off the hole rather than minting again.
+    const again = reconcileDay(p, stats, '2026-07-30', [one(true)], cats);
+    p = again.progress;
+    expect(p.brass).toBe(0);
+    expect(brassEarned(p)).toBe(minted);
+  });
+
+  it('never lets derived lifetime earnings go negative', () => {
+    // Nothing spent, so there is no hole to fall into: the floor is zero.
+    const p = { ...emptyProgress(), startedOn: '2026-07-30' };
+    const tick = reconcileDay(p, {}, '2026-07-30', [one(true)], cats);
+    const untick = reconcileDay(tick.progress, tick.stats, '2026-07-30', [one(false)], cats);
+    expect(untick.progress.brass).toBe(0);
+    expect(brassEarned(untick.progress)).toBe(0);
+  });
+});

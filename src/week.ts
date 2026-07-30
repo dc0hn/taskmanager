@@ -156,6 +156,20 @@ export function isSameMonth(a: string, b: string): boolean {
   return a.slice(0, 7) === b.slice(0, 7);
 }
 
+/**
+ * The weekday's name — "Monday", "Mon", "M".
+ *
+ * Kept next to `weekdayOf` deliberately. There were two private copies of this, one
+ * of them also called `weekdayOf` but returning a string rather than an index, which
+ * is the kind of collision that reads fine in both files and wrong across them.
+ */
+export function weekdayLabel(
+  dateKey: string,
+  width: 'long' | 'short' | 'narrow' = 'long'
+): string {
+  return fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: width });
+}
+
 /** "July 2026" */
 export function formatMonthLong(dateKey: string): string {
   return fromDateKey(dateKey).toLocaleDateString(undefined, {

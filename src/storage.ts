@@ -666,7 +666,7 @@ export function loadProgress(): UserProgress {
   const parsed = read<Record<string, unknown>>(PROGRESS_KEY);
   if (!parsed || typeof parsed !== 'object') return emptyProgress();
   const totalXp = isFiniteNum(parsed.totalXp) ? Math.max(0, Math.floor(parsed.totalXp)) : 0;
-  const brass = isFiniteNum(parsed.brass) ? Math.max(0, Math.floor(parsed.brass)) : 0;
+  const rawBrass = isFiniteNum(parsed.brass) ? Math.floor(parsed.brass) : 0;
   // Records written before earnings were derived carry `brassEarned`; the spend is
   // whatever it exceeded the balance by, which is exactly what the old field meant.
   const legacyEarned = isFiniteNum(parsed.brassEarned)
@@ -674,7 +674,11 @@ export function loadProgress(): UserProgress {
     : 0;
   const spent = isFiniteNum(parsed.brassSpent)
     ? Math.max(0, Math.floor(parsed.brassSpent))
-    : Math.max(0, legacyEarned - brass);
+    : Math.max(0, legacyEarned - Math.max(0, rawBrass));
+  // A negative balance is legitimate — see the note in `reconcileDay`. It is bounded
+  // below by the point where derived lifetime earnings would go negative, which is the
+  // one thing that cannot be true.
+  const brass = Math.max(-spent, rawBrass) || 0;
   // Only the banked disciplines are stored; anything else in the record is dropped
   // rather than trusted, so a stale key cannot inflate a track forever.
   const banked: Partial<Record<DisciplineId, number>> = {};

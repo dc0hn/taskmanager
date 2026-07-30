@@ -11,6 +11,7 @@ import {
   STREAK_THRESHOLD,
 } from '../streaks';
 import { markById } from '../daymarks';
+import { weekdayLabel } from '../week';
 import { staggerDelay } from '../utils/motion';
 
 // ============================================================================
@@ -204,9 +205,7 @@ function StreakPanel({
                   ))}
                 </div>
                 <span className="font-mono text-bone-4" style={{ fontSize: 8.5 }}>
-                  {new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
-                    weekday: 'narrow',
-                  })}
+                  {weekdayLabel(date, 'narrow')}
                 </span>
               </div>
             );

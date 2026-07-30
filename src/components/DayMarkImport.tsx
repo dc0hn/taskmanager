@@ -20,6 +20,11 @@ import {
 import { formatMonthKey } from '../month';
 import { addDays } from '../utils/time';
 import { fromDateKey } from '../utils/time';
+// The confirm grid's column headers come from the framed grid's own first day
+// rather than being hardcoded Mon-Sun: a Sunday-first source would otherwise be
+// relabelled into a different week, which is exactly the misread the first-cell
+// date exists to prevent.
+import { weekdayLabel } from '../week';
 import { colorsFor } from '../utils/color';
 import { useModalMotion } from '../utils/motion';
 
@@ -427,9 +432,9 @@ export default function DayMarkImport({
                       className="w-full bg-chassis-1 border border-rule-2 rounded px-2.5 h-8 font-mono text-body-sm text-ink-0 tnum outline-none focus:border-rule-3"
                     />
                     <p className="text-nano text-bone-3 mt-1 leading-relaxed">
-                      {weekdayOf(firstCell)} — so columns run{' '}
-                      {weekdayOf(firstCell, 'short')}→
-                      {weekdayOf(addDays(firstCell, 6), 'short')}
+                      {weekdayLabel(firstCell)} — so columns run{' '}
+                      {weekdayLabel(firstCell, 'short')}→
+                      {weekdayLabel(addDays(firstCell, 6), 'short')}
                     </p>
                   </div>
                   <div>
@@ -549,7 +554,7 @@ export default function DayMarkImport({
                 <div className="grid grid-cols-7 gap-1 mb-4">
                   {Array.from({ length: 7 }, (_, i) => (
                     <div key={i} className="legend text-center pb-1">
-                      {weekdayOf(addDays(firstCell, i), 'narrow')}
+                      {weekdayLabel(addDays(firstCell, i), 'narrow')}
                     </div>
                   ))}
                   {confirmCells.map((cell) => {
@@ -649,14 +654,3 @@ export default function DayMarkImport({
   );
 }
 
-/**
- * A weekday name for a date key, in the viewer's locale.
- *
- * The confirm grid's column headers come from the framed grid's own first day
- * rather than being hardcoded Mon–Sun: a Sunday-first source would otherwise be
- * relabelled into a different week, which is exactly the misread the first-cell
- * date exists to prevent.
- */
-function weekdayOf(dateKey: string, width: 'long' | 'short' | 'narrow' = 'long'): string {
-  return fromDateKey(dateKey).toLocaleDateString(undefined, { weekday: width });
-}
