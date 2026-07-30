@@ -1,9 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Check, Pencil, Pin, PinOff } from 'lucide-react';
 import type { Block, CategoryDef, DayPlan } from '../types';
 import { categoryColors, resolveCategory } from '../utils/color';
 import { format12h, formatHourLabel, toDateKey } from '../utils/time';
+import { DUR, SPRING_SETTLE } from '../utils/motion';
+import { reflowInsert, reflowPlace } from '../reflow';
 import { fromDateKey } from '../utils/time';
 
 // ============================================================================
@@ -127,6 +129,42 @@ function TimeGrid({
     };
   }, [dates, plans, workingStart, workingEnd]);
 
+  /**
+   * Live reflow preview.
+   *
+   * Previously the other entries did not move until the pointer was released, so
+   * a rearrangement arrived as a sudden jump *after* the decision had been made —
+   * which is most of why the shift felt broken. Now the day opens up underneath
+   * the cursor as you drag, and dropping simply commits what is already on screen.
+   *
+   * The preview calls the exact same pure functions App calls on drop, so what you
+   * see and what you get cannot disagree.
+   */
+  const preview = useMemo(() => {
+    if (!drag) return null;
+    const destination = plans[drag.ghostDate]?.blocks ?? [];
+
+    const outcome =
+      drag.ghostDate === drag.date
+        ? reflowPlace(destination, drag.id, drag.ghost.start, drag.ghost.end, workingEnd)
+        : (() => {
+            const block = plans[drag.date]?.blocks.find((b) => b.id === drag.id);
+            if (!block) return null;
+            return reflowInsert(
+              destination,
+              { ...block, start: drag.ghost.start, end: drag.ghost.end },
+              workingEnd
+            );
+          })();
+
+    if (!outcome) return null;
+    const positions = new Map<string, { start: number; end: number }>();
+    if (outcome.ok) {
+      for (const b of outcome.blocks) positions.set(b.id, { start: b.start, end: b.end });
+    }
+    return { date: drag.ghostDate, ok: outcome.ok, positions };
+  }, [drag, plans, workingEnd]);
+
   const yToMinutes = (clientY: number): number => {
     const rect = gridRef.current!.getBoundingClientRect();
     return (clientY - rect.top - PAD_TOP) / PX_PER_MIN + visibleStart;
@@ -142,12 +180,27 @@ function TimeGrid({
     return dates[idx];
   };
 
+  /**
+   * The live drag, mirrored into a ref.
+   *
+   * The pointer handlers below need the current ghost, but reading it from state
+   * would put `drag` in the effect's dependency list — and since every
+   * `pointermove` calls `setDrag`, the effect would tear down and re-attach the
+   * window listeners on every frame of the drag. That churn drops events and is
+   * its own source of stutter. The effect now keys only on the identity of the
+   * drag, which is fixed for its whole duration.
+   */
+  const dragRef = useRef<DragState | null>(null);
+  dragRef.current = drag;
+
+  const dragId = drag ? `${drag.date}:${drag.id}:${drag.mode}` : null;
+
   useEffect(() => {
-    if (!drag) return;
-    const d = drag;
+    if (!dragId) return;
 
     function onMove(e: PointerEvent) {
-      if (!gridRef.current) return;
+      const d = dragRef.current;
+      if (!d || !gridRef.current) return;
       const dyMin = yToMinutes(e.clientY) - d.pointerStartY;
       let nextStart = d.origStart;
       let nextEnd = d.origEnd;
@@ -173,6 +226,8 @@ function TimeGrid({
     }
 
     function onUp() {
+      const d = dragRef.current;
+      if (!d) return;
       const { start, end } = d.ghost;
       const targetDate = d.ghostDate;
       const movedDay = targetDate !== d.date;
@@ -201,7 +256,7 @@ function TimeGrid({
       window.removeEventListener('pointerup', onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag, plans, visibleStart, visibleEnd, dates]);
+  }, [dragId, visibleStart, visibleEnd, dates.length]);
 
   function startDrag(
     e: React.PointerEvent,
@@ -325,13 +380,21 @@ function TimeGrid({
 
               {/* blocks */}
               <AnimatePresence initial={false}>
-                {blocks.map((b, i) => {
+                {blocks.map((b) => {
                   const dragging = drag?.id === b.id && drag.date === date;
                   const hidden = drag?.id === b.id && drag.ghostDate !== date;
                   if (hidden) return null;
 
-                  const start = dragging ? drag!.ghost.start : b.start;
-                  const end = dragging ? drag!.ghost.end : b.end;
+                  // While dragging, everything on the destination column sits where
+                  // the reflow says it will land — so the day visibly makes room
+                  // rather than snapping into place after the drop.
+                  const shown =
+                    preview?.date === date && !dragging
+                      ? preview.positions.get(b.id)
+                      : undefined;
+
+                  const start = dragging ? drag!.ghost.start : (shown?.start ?? b.start);
+                  const end = dragging ? drag!.ghost.end : (shown?.end ?? b.end);
                   return (
                     <BlockCard
                       key={b.id}
@@ -340,8 +403,8 @@ function TimeGrid({
                       end={end}
                       top={(start - visibleStart) * PX_PER_MIN + PAD_TOP}
                       height={(end - start) * PX_PER_MIN}
-                      index={i}
                       dragging={dragging}
+                      refused={dragging && preview?.ok === false}
                       density={density}
                       categories={categories}
                       onPointerDown={(e, mode) => startDrag(e, date, b, mode)}
@@ -449,8 +512,9 @@ interface BlockCardProps {
   end: number;
   top: number;
   height: number;
-  index: number;
   dragging: boolean;
+  /** True when the current drop target is blocked by pinned or completed work. */
+  refused: boolean;
   density: 'comfortable' | 'compact';
   categories: CategoryDef[];
   onPointerDown: (e: React.PointerEvent, mode: DragState['mode']) => void;
@@ -465,8 +529,8 @@ function BlockCard({
   end,
   top,
   height,
-  index,
   dragging,
+  refused,
   density,
   categories,
   onPointerDown,
@@ -479,6 +543,7 @@ function BlockCard({
   const done = !!block.completed;
   const pinned = !!block.pinned;
   const [hovered, setHovered] = useState(false);
+  const reduced = useReducedMotion() ?? false;
 
   // Content tiers by rendered height. A 15-minute block cannot show three lines,
   // so it shows one and drops the rest rather than clipping them.
@@ -487,15 +552,31 @@ function BlockCard({
 
   return (
     <motion.div
-      layout={!dragging}
-      initial={{ opacity: 0, y: -3 }}
-      animate={{ opacity: done ? 0.55 : 1, y: 0 }}
-      exit={{ opacity: 0, y: -3 }}
+      /*
+       * `top`/`height` stay in `style`; `layout` animates the change.
+       *
+       * The stutter came from ONE thing: `layout` was paired with
+       * `animate={{ y: 0 }}`. Framer's layout projection moves an element by
+       * writing a transform, and `y` drives that same transform, so the two fought
+       * on every rearrangement. Removing `y` is the whole fix.
+       *
+       * An earlier attempt at this pulled `top`/`height` out of `style` and put
+       * them in `animate` instead. That was worse: with no CSS `top`, the element
+       * resolves to `top: auto` and framer animated every new target from zero, so
+       * blocks flew up to the top of the grid. Measured, caught, reverted.
+       *
+       * `layout` is off for the block under the cursor, which must track the
+       * pointer exactly rather than chase it through a spring.
+       */
+      layout={!dragging && !reduced}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: done ? 0.55 : 1 }}
+      exit={{ opacity: 0 }}
       transition={{
-        type: 'spring',
-        stiffness: 320,
-        damping: 30,
-        delay: dragging ? 0 : Math.min(index * 0.015, 0.24),
+        // No per-index delay. A stagger is right for a list arriving; on a
+        // rearrangement it made the cascade settle raggedly, one block at a time.
+        layout: reduced ? { duration: 0 } : SPRING_SETTLE,
+        opacity: { duration: DUR.fast },
       }}
       className="absolute left-1 right-1 cursor-grab active:cursor-grabbing group"
       style={{
@@ -524,12 +605,19 @@ function BlockCard({
       <div
         className="relative h-full overflow-hidden"
         style={{
-          background: done ? 'rgba(245, 242, 236, 0.025)' : c.fill,
+          background: refused
+            ? 'var(--bad-soft, rgba(224,104,95,0.13))'
+            : done
+              ? 'rgba(245, 242, 236, 0.025)'
+              : c.fill,
           borderRadius: BLOCK_RADIUS,
-          borderTop: `1px solid ${done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
-          borderRight: `1px solid ${done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
-          borderBottom: `1px solid ${done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
-          borderLeft: `2px solid ${done ? 'rgba(245, 242, 236,0.14)' : c.accent}`,
+          // `refused` outlines the block while it is still under the cursor, so a
+          // drop that pinned or completed work will reject is visible before you
+          // let go rather than only afterwards on the toast.
+          borderTop: `1px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
+          borderRight: `1px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
+          borderBottom: `1px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.06)' : c.line}`,
+          borderLeft: `2px solid ${refused ? 'var(--bad)' : done ? 'rgba(245, 242, 236,0.14)' : c.accent}`,
           boxShadow: dragging ? '0 18px 40px -14px rgba(0,0,0,0.85)' : undefined,
         }}
       >
