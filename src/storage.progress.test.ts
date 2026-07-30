@@ -293,6 +293,7 @@ describe('StreakState round trip', () => {
     startedOn: '2026-07-16',
     lastResetOn: '2026-07-15',
     consistencyXp: 350,
+    comebackOn: '2026-07-17',
   };
 
   it('preserves every field', () => {

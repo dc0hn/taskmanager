@@ -382,19 +382,40 @@ export interface DayReckoning {
 /**
  * Score one day. Pure: same blocks in, same numbers out, every time.
  */
+/**
+ * Everything outside a day's own blocks that changes what it scores.
+ *
+ * An object rather than trailing parameters, and that is the whole point. `reckonDay` used
+ * to take a bare `boost = 1` as its fourth argument, and adding a second scoring input the
+ * same way is exactly how boosters shipped half-wired: three of the five call sites simply
+ * did not pass it, and the default silently scored those days as unboosted. The completion
+ * toast said +121 while the reconcile credited +242.
+ *
+ * With an object, omitting a field is a type error at every call site rather than a
+ * plausible-looking `1`. Build it once and share it; there is a `boosts` memo in App.tsx
+ * doing exactly that.
+ */
+export interface DayModifiers {
+  /** Purchased booster for this specific day. 1 when none. */
+  boost: number;
+}
+
+export const NO_MODIFIERS: DayModifiers = { boost: 1 };
+
 export function reckonDay(
   date: string,
   blocks: Block[],
   categories: CategoryDef[],
   /**
-   * Multiplier for the whole day, from a purchased booster.
+   * Everything outside the day's blocks that changes its score.
    *
-   * Applied to the day's total rather than per block so the ledger lines stay equal to
-   * what each block is worth, and the boost appears as its own line — a doubled score
-   * you cannot see the doubling in would be untrustworthy.
+   * The boost is applied to the day's total rather than per block, so the ledger lines stay
+   * equal to what each block is worth and the boost appears as its own line — a doubled
+   * score you cannot see the doubling in would be untrustworthy.
    */
-  boost = 1
+  mods: DayModifiers = NO_MODIFIERS
 ): DayReckoning {
+  const boost = mods.boost;
   const real = scorable(blocks);
   const runs = comboRuns(blocks);
 
@@ -522,9 +543,9 @@ export function reconcileDay(
   date: string,
   blocks: Block[],
   categories: CategoryDef[],
-  boost = 1
+  mods: DayModifiers = NO_MODIFIERS
 ): ReconcileResult {
-  const fresh = reckonDay(date, blocks, categories, boost).stat;
+  const fresh = reckonDay(date, blocks, categories, mods).stat;
   const previous = stats[date];
 
   const xpDelta = fresh.xpEarned - (previous?.xpEarned ?? 0);
@@ -587,15 +608,15 @@ export function reconcileDays(
   stats: Record<string, DailyStat>,
   days: { date: string; blocks: Block[] }[],
   categories: CategoryDef[],
-  /** Per-day multipliers from purchased boosters. Absent means one. */
-  boosts: Record<string, number> = {}
+  /** Per-day modifiers. A day with no entry scores unmodified. */
+  modifiers: Record<string, DayModifiers> = {}
 ): ReconcileResult {
   let p = progress;
   let s = stats;
   let changed = false;
   let delta = 0;
   for (const day of days) {
-    const r = reconcileDay(p, s, day.date, day.blocks, categories, boosts[day.date] ?? 1);
+    const r = reconcileDay(p, s, day.date, day.blocks, categories, modifiers[day.date] ?? NO_MODIFIERS);
     if (r.changed) {
       p = r.progress;
       s = r.stats;
@@ -743,8 +764,8 @@ export function brassEarned(progress: UserProgress): number {
 export function areaTotals(
   days: { date: string; blocks: Block[] }[],
   categories: CategoryDef[],
-  /** Per-day multipliers from purchased boosters. Absent means one. */
-  boosts: Record<string, number> = {}
+  /** Per-day modifiers. A day with no entry scores unmodified. */
+  modifiers: Record<string, DayModifiers> = {}
 ): {
   byCategory: Record<string, number>;
   byDiscipline: Partial<Record<DisciplineId, number>>;
@@ -752,7 +773,7 @@ export function areaTotals(
   const byCategory: Record<string, number> = {};
   const byDiscipline: Partial<Record<DisciplineId, number>> = {};
   for (const day of days) {
-    const r = reckonDay(day.date, day.blocks, categories, boosts[day.date] ?? 1);
+    const r = reckonDay(day.date, day.blocks, categories, modifiers[day.date] ?? NO_MODIFIERS);
     for (const [id, xp] of Object.entries(r.byCategory)) {
       byCategory[id] = (byCategory[id] ?? 0) + xp;
     }

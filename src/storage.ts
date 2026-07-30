@@ -828,6 +828,7 @@ export function loadStreak(): StreakState {
     startedOn: isDateKey(parsed.startedOn) ? parsed.startedOn : '',
     lastResetOn: isDateKey(parsed.lastResetOn) ? parsed.lastResetOn : '',
     consistencyXp: num(parsed.consistencyXp, 0),
+    comebackOn: isDateKey(parsed.comebackOn) ? parsed.comebackOn : '',
   };
 }
 

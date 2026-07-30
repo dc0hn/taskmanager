@@ -540,6 +540,14 @@ export interface StreakState {
   lastResetOn: string;
   /** XP the Consistency discipline has accumulated from kept days. */
   consistencyXp: number;
+  /**
+   * The day a comeback was last paid.
+   *
+   * Durable rather than a ref, and that is a fix as well as a move: this used to live in a
+   * `useRef` that reset on reload, so reopening the app on the day you came back lost the
+   * flag and the matching badge could not fire.
+   */
+  comebackOn: string;
 }
 
 /**

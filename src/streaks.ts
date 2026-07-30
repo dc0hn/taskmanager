@@ -85,6 +85,7 @@ export function emptyStreak(): StreakState {
     startedOn: '',
     lastResetOn: '',
     consistencyXp: 0,
+    comebackOn: '',
   };
 }
 
@@ -281,6 +282,9 @@ export function resolveStreak(
           if (!payouts.some((p) => p.key === key)) {
             payouts.push({ key, xp: COMEBACK_XP, label: 'Back on it' });
           }
+          // Recorded on the state rather than reported to the caller, so it survives a
+          // reload and the badge that depends on it can still fire.
+          next.comebackOn = today;
           next.lastResetOn = '';
         }
         break;

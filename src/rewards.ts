@@ -33,7 +33,16 @@ export type RewardMoment =
   | { kind: 'badge'; def: BadgeDef }
   | { kind: 'quest'; name: string; xp: number }
   | { kind: 'codex'; name: string; glyph: string; xp: number }
-  | { kind: 'runKept'; run: number; seed: number };
+  | { kind: 'runKept'; run: number; seed?: number }
+  /**
+   * The two full-screen moments. In the queue so there is one ordered stream, but NOT on
+   * the timer: a takeover covers the screen and is dismissed by a person, so expiring it
+   * after a couple of seconds would either interrupt the thing it is celebrating or make
+   * the dismissal meaningless. They also pre-empt — arriving at an arc capstone should not
+   * queue behind three quest toasts.
+   */
+  | { kind: 'takeover'; standing: Standing; prestige: boolean }
+  | { kind: 'runTakeover'; days: number };
 
 /**
  * How long each kind holds the screen.
@@ -48,7 +57,15 @@ export const REWARD_MS: Record<RewardMoment['kind'], number> = {
   quest: 2800,
   codex: 3200,
   runKept: 2600,
+  // Zero means "never expires" — dismissed by the viewer. See the note on the type.
+  takeover: 0,
+  runTakeover: 0,
 };
+
+/** Full-screen moments jump the queue and clear what was behind them. */
+export function preempts(kind: RewardMoment['kind']): boolean {
+  return kind === 'takeover' || kind === 'runTakeover';
+}
 
 export interface RewardQueue {
   /** The moment on screen, or null when nothing is playing. */
@@ -56,6 +73,8 @@ export interface RewardQueue {
   /** How many are still waiting behind it, for the "· N MORE" label. */
   remaining: number;
   push: (...moments: RewardMoment[]) => void;
+  /** Dismiss the current moment. Full-screen moments have no timer and need this. */
+  dismiss: () => void;
   /** Drop everything. Used by the reset control, which must leave nothing playing. */
   clear: () => void;
 }
@@ -65,8 +84,18 @@ export function useRewardQueue(): RewardQueue {
 
   const push = useCallback((...moments: RewardMoment[]) => {
     if (moments.length === 0) return;
-    setQueue((q) => [...q, ...moments]);
+    setQueue((q) => {
+      // A takeover pre-empts: it goes to the front and drops what was queued behind it.
+      // Those were small toasts about the same event that has just been celebrated at full
+      // screen, and playing them afterwards reads as an anticlimax.
+      const taking = moments.filter((m) => preempts(m.kind));
+      if (taking.length > 0) return [...taking, ...moments.filter((m) => !preempts(m.kind))];
+      return [...q, ...moments];
+    });
   }, []);
+
+  /** Dismiss the current moment early. The only way past a takeover. */
+  const dismiss = useCallback(() => setQueue((q) => q.slice(1)), []);
 
   const clear = useCallback(() => setQueue([]), []);
 
@@ -74,6 +103,8 @@ export function useRewardQueue(): RewardQueue {
 
   useEffect(() => {
     if (!current) return;
+    // Dwell of zero means the viewer dismisses it.
+    if (REWARD_MS[current.kind] === 0) return;
     // Keyed on the head object rather than on the array, so pushing more while one is
     // playing does not restart its clock — `slice` preserves the reference of everything
     // it keeps, so appending leaves `queue[0]` identical.
@@ -81,7 +112,7 @@ export function useRewardQueue(): RewardQueue {
     return () => window.clearTimeout(id);
   }, [current]);
 
-  return { current, remaining: Math.max(0, queue.length - 1), push, clear };
+  return { current, remaining: Math.max(0, queue.length - 1), push, dismiss, clear };
 }
 
 /** Narrow the head to one kind, for a component that only renders that kind. */
