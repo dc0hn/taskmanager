@@ -2,6 +2,7 @@ import { memo } from 'react';
 import {
   CalendarDays,
   Clock3,
+  Gauge,
   LayoutGrid,
   Repeat,
   Tag,
@@ -21,7 +22,7 @@ import { BackupButton } from './BackupModal';
 // extra padding.
 // ============================================================================
 
-export type NavKey = 'calendar' | 'goals' | 'routines' | 'categories';
+export type NavKey = 'calendar' | 'goals' | 'routines' | 'months' | 'categories';
 
 interface Props {
   nav: NavKey;
@@ -45,6 +46,7 @@ const NAV_ITEMS: { key: NavKey; label: string; icon: typeof LayoutGrid }[] = [
   { key: 'calendar', label: 'Calendar', icon: CalendarDays },
   { key: 'goals', label: 'Weekly goals', icon: Target },
   { key: 'routines', label: 'Routines', icon: Repeat },
+  { key: 'months', label: 'The record', icon: Gauge },
   { key: 'categories', label: 'Categories', icon: Tag },
 ];
 

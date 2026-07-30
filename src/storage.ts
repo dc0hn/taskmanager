@@ -5,9 +5,12 @@ import type {
   Category,
   CategoryDef,
   CategoryKind,
+  ClearedCarryover,
   GoalCredit,
   HabitStore,
   DayPlan,
+  MonthlyGoalSummary,
+  MonthRecord,
   RecurrenceRule,
   RecurringCompletion,
   RecurringTask,
@@ -36,6 +39,7 @@ import { uid } from './utils/id';
 
 const PLAN_PREFIX = 'dp:plan:';
 const WEEK_PREFIX = 'dp:week:';
+const MONTH_PREFIX = 'dp:month:';
 const SETTINGS_KEY = 'dp:settings:v2';
 const CATEGORIES_KEY = 'dp:categories:v1';
 const CARRYOVER_KEY = 'dp:carryover:v1';
@@ -438,6 +442,105 @@ export function loadHabits(): HabitStore {
 
 export function saveHabits(store: HabitStore): void {
   write(HABITS_KEY, store);
+}
+
+// ---------------------------------------------------------------------------
+// Monthly records
+//
+// Sealed summaries of how standing weekly goals fared over a calendar month.
+// These are written rather than derived because goal credits are pruned after
+// twelve weeks — without them there would be no history to show.
+// ---------------------------------------------------------------------------
+
+const MONTH_RE = /^\d{4}-\d{2}$/;
+const isMonthKey = (v: unknown): v is string =>
+  typeof v === 'string' && MONTH_RE.test(v);
+
+function normalizeMonthGoal(r: unknown): MonthlyGoalSummary | null {
+  if (!r || typeof r !== 'object') return null;
+  const g = r as Record<string, unknown>;
+  const goalId = str(g.goalId);
+  const label = str(g.label).trim();
+  if (!goalId || !label) return null;
+  const monthlyTarget =
+    isFiniteNum(g.monthlyTarget) && g.monthlyTarget > 0 ? g.monthlyTarget : 1;
+  const done = isFiniteNum(g.done) && g.done >= 0 ? g.done : 0;
+  return {
+    goalId,
+    label,
+    category: toCategoryId(g.category),
+    targetKind: g.targetKind === 'minutes' ? 'minutes' : 'sessions',
+    weeklyTarget:
+      isFiniteNum(g.weeklyTarget) && g.weeklyTarget > 0 ? Math.round(g.weeklyTarget) : 1,
+    monthlyTarget,
+    done,
+    weeksIssued:
+      isFiniteNum(g.weeksIssued) && g.weeksIssued >= 0 ? Math.round(g.weeksIssued) : 0,
+    // Recomputed rather than trusted, so a hand-edited file cannot show a ring
+    // that disagrees with its own numbers.
+    ratio: done / monthlyTarget,
+  };
+}
+
+function normalizeCleared(r: unknown): ClearedCarryover | null {
+  if (!r || typeof r !== 'object') return null;
+  const c = r as Record<string, unknown>;
+  const goalId = str(c.goalId);
+  const label = str(c.label).trim();
+  if (!goalId || !label) return null;
+  return {
+    goalId,
+    label,
+    category: toCategoryId(c.category),
+    targetKind: c.targetKind === 'minutes' ? 'minutes' : 'sessions',
+    residual: isFiniteNum(c.residual) && c.residual > 0 ? Math.round(c.residual) : 1,
+    deferrals: isFiniteNum(c.deferrals) && c.deferrals >= 0 ? Math.round(c.deferrals) : 0,
+    firstDeferredWeek: isDateKey(c.firstDeferredWeek) ? c.firstDeferredWeek : '',
+    lastWeek: isDateKey(c.lastWeek) ? c.lastWeek : '',
+  };
+}
+
+export function loadMonth(monthKey: string): MonthRecord | null {
+  const parsed = read<Record<string, unknown>>(MONTH_PREFIX + monthKey);
+  if (!parsed) return null;
+  const goals = Array.isArray(parsed.goals)
+    ? (parsed.goals.map(normalizeMonthGoal).filter(Boolean) as MonthlyGoalSummary[])
+    : [];
+  return {
+    month: monthKey,
+    daysInMonth:
+      isFiniteNum(parsed.daysInMonth) && parsed.daysInMonth >= 28
+        ? Math.round(parsed.daysInMonth)
+        : 30,
+    sealedOn: isDateKey(parsed.sealedOn) ? parsed.sealedOn : '',
+    goals,
+    cleared: Array.isArray(parsed.cleared)
+      ? (parsed.cleared.map(normalizeCleared).filter(Boolean) as ClearedCarryover[])
+      : [],
+    overall:
+      goals.length > 0
+        ? goals.reduce((sum, g) => sum + g.ratio, 0) / goals.length
+        : 0,
+  };
+}
+
+export function saveMonth(record: MonthRecord): void {
+  if (!isMonthKey(record.month)) {
+    console.error('Almanac: refusing to save month with invalid key', record.month);
+    return;
+  }
+  write(MONTH_PREFIX + record.month, record);
+}
+
+/** Every sealed month key, ascending. */
+export function listMonthKeys(): string[] {
+  return listKeys(MONTH_PREFIX).filter(isMonthKey);
+}
+
+export function loadAllMonths(): MonthRecord[] {
+  return listMonthKeys()
+    .map(loadMonth)
+    .filter((m): m is MonthRecord => m !== null);
 }
 
 // ---------------------------------------------------------------------------

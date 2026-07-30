@@ -244,6 +244,64 @@ export interface CarryoverItem {
 
 export type GoalOutcome = 'met' | 'partial' | 'missed' | 'void';
 
+// ---------------------------------------------------------------------------
+// Monthly record
+//
+// A second statistic above the week, for standing (weekly-cadence) goals only.
+// The monthly target is the weekly total pro-rated by the length of the month —
+// see src/month.ts — so 100% means "kept pace" whether the month is 28 days or
+// 31, and the weekly figures are left exactly as they are.
+//
+// Stored rather than derived, because goal credits are pruned after twelve weeks
+// and a week's outcome is computed from them rather than saved. Without a sealed
+// summary there would be nothing to show beyond about three months.
+// ---------------------------------------------------------------------------
+
+export interface MonthlyGoalSummary {
+  goalId: string;
+  /** Snapshotted, so a renamed or deleted goal still reads correctly in history. */
+  label: string;
+  category: Category;
+  targetKind: GoalTargetKind;
+  /** The weekly total this was measured against. */
+  weeklyTarget: number;
+  /** weeklyTarget × daysInMonth ÷ 7, unrounded. */
+  monthlyTarget: number;
+  /** Sessions (distinct days) or minutes, matching targetKind. */
+  done: number;
+  /** How many weeks in the month the goal was actually issued. */
+  weeksIssued: number;
+  /** done ÷ monthlyTarget. May exceed 1. */
+  ratio: number;
+}
+
+/** A carryover item emptied from the pile when its month was sealed. */
+export interface ClearedCarryover {
+  goalId: string;
+  label: string;
+  category: Category;
+  targetKind: GoalTargetKind;
+  residual: number;
+  deferrals: number;
+  firstDeferredWeek: string;
+  lastWeek: string;
+}
+
+export interface MonthRecord {
+  month: string; // 'YYYY-MM'
+  daysInMonth: number;
+  /** Day key the seal actually ran; empty for a month still in progress. */
+  sealedOn: string;
+  goals: MonthlyGoalSummary[];
+  /** What was carried and then let go when the month closed. */
+  cleared: ClearedCarryover[];
+  /**
+   * Mean of the per-goal ratios. Sessions and minutes cannot be summed, so a
+   * weighted total is unavailable; averaging the fractions is the honest option.
+   */
+  overall: number;
+}
+
 export interface GoalProgress {
   goal: WeeklyGoal;
   /** Distinct days credited — one sitting per day, so chunked work counts once. */

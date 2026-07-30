@@ -478,6 +478,7 @@ function BlockCard({
   const c = categoryColors(block.category, categories);
   const done = !!block.completed;
   const pinned = !!block.pinned;
+  const [hovered, setHovered] = useState(false);
 
   // Content tiers by rendered height. A 15-minute block cannot show three lines,
   // so it shows one and drops the rest rather than clipping them.
@@ -497,7 +498,17 @@ function BlockCard({
         delay: dragging ? 0 : Math.min(index * 0.015, 0.24),
       }}
       className="absolute left-1 right-1 cursor-grab active:cursor-grabbing group"
-      style={{ top: top + 'px', height: height + 'px', zIndex: dragging ? 40 : 2 }}
+      style={{
+        top: top + 'px',
+        height: height + 'px',
+        // Every block shared z-index 2, so paint order fell to DOM order and a
+        // later entry could cover an earlier one's controls. Hovering lifts a
+        // block above its neighbours, which is what guarantees its own checkbox
+        // is reachable and never sits behind the section before or after it.
+        zIndex: dragging ? 40 : hovered ? 20 : 2,
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onPointerDown={(e) => onPointerDown(e, 'move')}
       onDoubleClick={(e) => {
         e.stopPropagation();
@@ -506,7 +517,10 @@ function BlockCard({
     >
       {/* The block: a tinted field with a coloured margin rule. The category
           lives in that 2px stripe and in the small-caps legend — it never fills
-          the surface hard enough to compete with the amber now-line. */}
+          the surface hard enough to compete with the amber now-line.
+          Stays clipped, so the fill respects the radius and long titles truncate;
+          the action cluster is a sibling below, outside this clip, so a 15-minute
+          entry's controls are never cut off. */}
       <div
         className="relative h-full overflow-hidden"
         style={{
@@ -585,9 +599,17 @@ function BlockCard({
             </div>
           </div>
         )}
+      </div>
 
-        {/* action cluster */}
-        <div className="absolute top-1 right-1 flex items-center gap-0.5 z-20">
+      {/* Action cluster — a SIBLING of the clipped surface, not a child.
+          Centred on the block's own vertical midpoint rather than pinned to its
+          top edge, so the controls always sit in the middle of the section they
+          belong to. Pinning them to the top put them hard against the boundary
+          with the entry above, and now that reflow packs entries back to back
+          that boundary is where most blocks meet their neighbour.
+          Living outside the surface's overflow-hidden is what stops a 15-minute
+          entry clipping its own checkbox in half. */}
+      <div className="absolute top-1/2 -translate-y-1/2 right-1 flex items-center gap-0.5 z-20">
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
@@ -652,7 +674,6 @@ function BlockCard({
               <Pencil size={11} strokeWidth={1.8} />
             </button>
           )}
-        </div>
       </div>
     </motion.div>
   );

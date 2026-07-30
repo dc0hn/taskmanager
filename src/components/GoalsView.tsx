@@ -30,6 +30,7 @@ import {
   weekProgress,
 } from '../goals';
 import { colorsFor } from '../utils/color';
+import Ring from './Ring';
 import { formatDuration } from '../utils/time';
 import { uid } from '../utils/id';
 import {
@@ -54,6 +55,8 @@ interface Props {
   carryover: CarryoverItem[];
   categories: CategoryDef[];
   review: WeekReview;
+  /** This month's completion per goal id, for the small month gauge. */
+  monthRatios: Record<string, { ratio: number; done: number; target: number }>;
   onAddGoal: (goal: WeeklyGoal) => void;
   onRemoveGoal: (id: string) => void;
   onSetVoided: (goalId: string, voided: boolean) => void;
@@ -69,6 +72,7 @@ export default function GoalsView({
   carryover,
   categories,
   review,
+  monthRatios,
   onAddGoal,
   onRemoveGoal,
   onSetVoided,
@@ -274,19 +278,50 @@ export default function GoalsView({
                         </button>
                       </div>
                     </div>
-                    <div
-                      className="mt-2 h-[5px] rounded-full overflow-hidden"
-                      style={{ background: 'rgba(245, 242, 236,0.06)' }}
-                    >
-                      <motion.div
-                        className="h-full rounded-full"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${pct}%` }}
-                        transition={{ type: 'spring', stiffness: 120, damping: 26 }}
-                        style={{
-                          background: p.outcome === 'met' ? 'var(--good)' : c.accent,
-                        }}
-                      />
+                    <div className="mt-2 flex items-center gap-3">
+                      <div
+                        className="flex-1 h-[5px] rounded-full overflow-hidden"
+                        style={{ background: 'rgba(245, 242, 236,0.06)' }}
+                      >
+                        <motion.div
+                          className="h-full rounded-full"
+                          initial={{ width: 0 }}
+                          animate={{ width: `${pct}%` }}
+                          transition={{ type: 'spring', stiffness: 120, damping: 26 }}
+                          style={{
+                            background: p.outcome === 'met' ? 'var(--good)' : c.accent,
+                          }}
+                        />
+                      </div>
+                      {/* Month gauge, standing goals only — a one-off has no
+                          weekly total to pro-rate. The bar above is the week; this
+                          is the separate monthly statistic. */}
+                      {p.goal.cadence === 'weekly' && monthRatios[p.goal.id] && (
+                        <div
+                          title={`This month: ${
+                            p.goal.targetKind === 'sessions'
+                              ? `${monthRatios[p.goal.id].done} of ${
+                                  Math.round(monthRatios[p.goal.id].target * 10) / 10
+                                } sessions`
+                              : `${formatDuration(monthRatios[p.goal.id].done)} of ${formatDuration(
+                                  Math.round(monthRatios[p.goal.id].target)
+                                )}`
+                          } — the weekly total pro-rated over ${
+                            new Date().toLocaleDateString(undefined, { month: 'long' })
+                          }`}
+                          className="shrink-0"
+                        >
+                          {/* Full strength, not dimmed. The week bar sits
+                              immediately left in the same colour, so the ring is
+                              already distinguished by shape — dimming it as well
+                              made it too faint to read at this size. */}
+                          <Ring
+                            ratio={monthRatios[p.goal.id].ratio}
+                            size={30}
+                            accent={c.accent}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

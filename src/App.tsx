@@ -35,10 +35,12 @@ import {
   loadHabits,
   loadPlan,
   loadPlans,
+  loadAllMonths,
   loadAllWeeks,
   loadSettings,
   loadWeek,
   savePlan,
+  saveMonth,
   saveCarryover,
   saveCategories,
   saveHabits,
@@ -46,6 +48,12 @@ import {
   saveWeek,
 } from './storage';
 import { buildSchedule, rulesFor } from './scheduler';
+import MonthsView from './components/MonthsView';
+import {
+  currentMonthKey,
+  monthInProgress,
+  resolveElapsedMonths,
+} from './month';
 import {
   describeReflow,
   reflowInsert,
@@ -220,6 +228,23 @@ export default function App() {
     const issued = issueRecurringGoals(current, loadAllWeeks());
     if (issued) saveWeek(issued);
 
+    // 3) Seal every elapsed month and empty the carryover pile into it. The pile
+    //    is month-scoped now: on the 1st it resets, and what was still waiting is
+    //    written into that month's record as "carried and let go" rather than
+    //    disappearing. Same lazy, idempotent shape as the weekly rollover — the
+    //    presence of a month record is the guard.
+    const monthResult = resolveElapsedMonths(
+      currentMonthKey(),
+      loadAllMonths(),
+      loadAllWeeks(),
+      result.changed ? result.carryover : loadCarryover(),
+      todayKey
+    );
+    if (monthResult.changed) {
+      for (const m of monthResult.sealed) saveMonth(m);
+      setCarryover(monthResult.carryover);
+    }
+
     if (result.changed || issued) setWeek(loadWeek(weekKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -320,6 +345,34 @@ export default function App() {
   }, [plans]);
 
   const openGoals = useMemo(() => openGoalsOf(week), [week]);
+
+  /**
+   * Sealed months plus the one in progress.
+   *
+   * Past months are read from their own records, because credits are pruned at
+   * twelve weeks and could not reconstruct them. The current month is computed
+   * live from the week records so the gauge moves as you tick things off, and is
+   * flagged as provisional in the view — a part-month measured against a whole
+   * month's target necessarily reads low.
+   */
+  const monthRecords = useMemo(() => {
+    const current = currentMonthKey();
+    const sealed = loadAllMonths().filter((m) => m.month !== current);
+    return [...sealed, monthInProgress(current, loadAllWeeks())];
+    // `week` is a dependency so ticking a block re-reads the month in progress.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week, carryover, nav]);
+
+  /** This month's ratio per goal id, for the small gauge on each weekly goal. */
+  const monthRatios = useMemo(() => {
+    const live = monthInProgress(currentMonthKey(), loadAllWeeks());
+    const out: Record<string, { ratio: number; done: number; target: number }> = {};
+    for (const g of live.goals) {
+      out[g.goalId] = { ratio: g.ratio, done: g.done, target: g.monthlyTarget };
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week]);
 
   const dueRoutines = useMemo(() => {
     const placed = new Set<string>();
@@ -991,12 +1044,24 @@ export default function App() {
               carryover={carryover}
               categories={categories}
               review={review}
+              monthRatios={monthRatios}
               onAddGoal={handleAddGoal}
               onRemoveGoal={handleRemoveGoal}
               onSetVoided={handleSetVoided}
               onPullCarryover={handlePullCarryover}
               onDropCarryover={handleDropCarryover}
               onResizeCarryover={handleResizeCarryover}
+            />
+          </>
+        )}
+
+        {nav === 'months' && (
+          <>
+            <div className="titlebar-drag" />
+            <MonthsView
+              months={monthRecords}
+              currentMonth={currentMonthKey()}
+              categories={categories}
             />
           </>
         )}
