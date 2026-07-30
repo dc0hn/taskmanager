@@ -20,6 +20,12 @@ import {
   weeklyChallenge,
   WILDCARDS,
   wildcardQuest,
+  drawWeek,
+  sealDraws,
+  finishedWhenPlanned,
+  salvaged,
+  profileFacts,
+  STRONGEST_HOUR_MIN,
   type WeekContext,
 } from './quests';
 import { payoutXp } from './types';
@@ -681,23 +687,42 @@ describe('the scored era', () => {
   });
 });
 
-describe('the draw pools are frozen', () => {
+describe('the draw pools', () => {
   /**
-   * A guard, not a preference.
+   * A guard, and the reason it can now be raised rather than merely held.
    *
-   * `pick` is `seedFrom(key) % items.length`, so a pool's LENGTH is part of the answer
-   * for every seed. Adding or removing an entry re-rolls every date and week, including
-   * ones already paid — and since a payout key embeds the drawn spec's id, the week in
-   * progress can pay twice for the same day under two different names.
+   * `pick` is `seedFrom(key) % items.length`, so a pool's LENGTH is part of the answer for
+   * every seed. Changing it re-rolls every UNSEALED week — and since a payout key embeds
+   * the drawn spec's id, a re-rolled week in progress can pay twice for the same day under
+   * two names.
    *
-   * These numbers exist so that change cannot happen by accident. If you are here
-   * because this test failed: the pool changed, every draw moved, and that needs to be a
-   * decision rather than a side effect. See the note above WILDCARDS in quests.ts.
+   * Weeks are sealed on issue now, so their draws stop asking and the pools are safe to
+   * grow. These numbers still exist so growing them is a decision: if you are here because
+   * this failed, the pools changed and every unsealed draw moved with them.
    */
-  it('holds the counts every past draw was made against', () => {
-    expect(WILDCARDS).toHaveLength(8);
-    expect(DAILY_CHALLENGES).toHaveLength(6);
-    expect(WEEKLY_CHALLENGES).toHaveLength(4);
+  it('holds the counts the current draws are made against', () => {
+    expect(WILDCARDS).toHaveLength(16);
+    expect(DAILY_CHALLENGES).toHaveLength(12);
+    expect(WEEKLY_CHALLENGES).toHaveLength(12);
+  });
+
+  it('keeps the original entries first, so an append cannot become a reorder', () => {
+    // Appending is safe for sealed weeks; REORDERING is not safe for anything, because a
+    // sealed id still has to resolve to the same spec.
+    expect(WEEKLY_CHALLENGES.slice(0, 4).map((s) => s.id)).toEqual([
+      'five-kept',
+      'xp-1200',
+      'three-clear',
+      'focus-ten',
+    ]);
+    expect(DAILY_CHALLENGES.slice(0, 6).map((s) => s.id)).toEqual([
+      'first-by-noon',
+      'three-in-order',
+      'longest-first',
+      'high-priority',
+      'two-focus',
+      'clear-it',
+    ]);
   });
 
   it('keeps ids unique within each pool, since payout keys are built from them', () => {
@@ -715,5 +740,256 @@ describe('the draw pools are frozen', () => {
         pick(DAILY_CHALLENGES, `daily:${key}`).id
       );
     }
+  });
+});
+
+describe('sealing a week\'s draws', () => {
+  const W = '2026-07-27';
+
+  it('draws every day of the week, plus the weekly and the wildcards', () => {
+    const d = drawWeek(W);
+    expect(Object.keys(d.daily)).toHaveLength(7);
+    expect(d.weekly.length).toBeGreaterThan(0);
+    expect(d.wildcards.length).toBeGreaterThan(1);
+  });
+
+  it('draws the same thing for the same week, always', () => {
+    expect(drawWeek(W)).toEqual(drawWeek(W));
+  });
+
+  it('seals into a record that has none, and never re-seals', () => {
+    const week = { week: W, goals: [], credits: [] };
+    const sealed = sealDraws(week);
+    expect(sealed).not.toBeNull();
+    expect(sealDraws(sealed!)).toBeNull();
+  });
+
+  it('holds a sealed week steady even if the pools change under it', () => {
+    // The whole point. A sealed week reads its own recorded ids, so appending to a pool
+    // cannot re-draw it — which is what makes the same day paying twice impossible.
+    const sealed = sealDraws({ week: W, goals: [], credits: [] })!;
+    const pinned = 'five-kept';
+    const c = ctx({ week: { ...sealed, draws: { ...sealed.draws!, weekly: pinned } } });
+    expect(weeklyChallenge(c).id).toBe(`weekly:${W}:${pinned}`);
+  });
+
+  it('falls back to drawing for a week with no seal', () => {
+    // Weeks issued before this shipped. They score as whatever the pool says today, which
+    // is the position they were already in.
+    const c = ctx();
+    expect(weeklyChallenge(c).id.startsWith(`weekly:${W}:`)).toBe(true);
+  });
+
+  it('falls back for a sealed id this build does not recognise', () => {
+    const sealed = sealDraws({ week: W, goals: [], credits: [] })!;
+    const c = ctx({
+      week: { ...sealed, draws: { ...sealed.draws!, weekly: 'from-the-future' } },
+    });
+    expect(weeklyChallenge(c).id).toBe(
+      `weekly:${W}:${pick(WEEKLY_CHALLENGES, `weekly:${W}`).id}`
+    );
+  });
+});
+
+describe('the new predicates', () => {
+  const at = (end: number, completedAt?: number, over: Partial<Block> = {}) =>
+    block({ end, completedAt, completed: completedAt != null, ...over });
+
+  it('counts a block finished inside the tolerance either side', () => {
+    expect(finishedWhenPlanned(at(600, 600))).toBe(true);
+    expect(finishedWhenPlanned(at(600, 610))).toBe(true);
+    expect(finishedWhenPlanned(at(600, 590))).toBe(true);
+    expect(finishedWhenPlanned(at(600, 611))).toBe(false);
+    expect(finishedWhenPlanned(at(600, 611), 15)).toBe(true);
+  });
+
+  it('needs a timestamp, and treats absence as unknown rather than as punctual', () => {
+    expect(finishedWhenPlanned(block({ completed: true }))).toBe(false);
+    expect(finishedWhenPlanned(at(600, 600, { completed: false }))).toBe(false);
+  });
+
+  it('finds blocks that were rescheduled before being done', () => {
+    const blocks = [
+      block({ id: 'a', completed: true, moves: 3 }),
+      block({ id: 'b', completed: true, moves: 1 }),
+      block({ id: 'c', completed: false, moves: 5 }),
+      block({ id: 'd', completed: true }),
+    ];
+    expect(salvaged(blocks).map((b) => b.id)).toEqual(['a']);
+    expect(salvaged(blocks, 1).map((b) => b.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('profile facts', () => {
+  const day = (date: string, blocks: Block[]) => ({ date, blocks });
+  const done = (id: string, completedAt: number, category = 'deep') =>
+    block({ id, completed: true, completedAt, category, start: 540, end: 600 });
+
+  it('says nothing on thin history', () => {
+    // A discovery quest that fires on no data is worse than no discovery quest.
+    const days = [day('2026-07-01', [done('a', 600), done('b', 600)])];
+    expect(profileFacts(days, DEFAULT_CATEGORIES).strongestHour).toBeNull();
+  });
+
+  it('finds the hour once there is enough of it', () => {
+    const blocks = Array.from({ length: STRONGEST_HOUR_MIN + 2 }, (_, i) => done(`b${i}`, 630));
+    const facts = profileFacts([day('2026-07-01', blocks)], DEFAULT_CATEGORIES);
+    expect(facts.strongestHour).toBe(10);
+  });
+
+  it('says nothing when two hours tie', () => {
+    // Preferring one side of a coin flip would send someone to an arbitrary hour.
+    const half = STRONGEST_HOUR_MIN;
+    const blocks = [
+      ...Array.from({ length: half }, (_, i) => done(`a${i}`, 630)),
+      ...Array.from({ length: half }, (_, i) => done(`b${i}`, 930)),
+    ];
+    expect(profileFacts([day('2026-07-01', blocks)], DEFAULT_CATEGORIES).strongestHour).toBeNull();
+  });
+
+  it('wraps a past-midnight completion back onto a clock', () => {
+    // completedAt keeps counting past 1440, so 1470 is half past midnight, not hour 24.
+    const blocks = Array.from({ length: STRONGEST_HOUR_MIN + 2 }, (_, i) => done(`b${i}`, 1470));
+    expect(profileFacts([day('2026-07-01', blocks)], DEFAULT_CATEGORIES).strongestHour).toBe(0);
+  });
+
+  it('finds the least-touched category, and says nothing when there is only one', () => {
+    const mixed = [day('2026-07-01', [done('a', 600, 'deep'), done('b', 600, 'deep'), done('c', 600, 'admin')])];
+    expect(profileFacts(mixed, DEFAULT_CATEGORIES).leastTouched).toBe('admin');
+
+    const single = [day('2026-07-01', [done('a', 600, 'deep')])];
+    expect(profileFacts(single, DEFAULT_CATEGORIES).leastTouched).toBeNull();
+  });
+
+  it('reports nothing at all for an empty profile', () => {
+    expect(profileFacts([], DEFAULT_CATEGORIES)).toEqual({
+      strongestHour: null,
+      leastTouched: null,
+    });
+  });
+});
+
+describe('the discovery content degrades rather than misfires', () => {
+  it('reports no progress with no profile facts', () => {
+    // Every discovery spec has to be unfinishable rather than resolve to hour zero.
+    const c = ctx({
+      plans: plansOf({
+        '2026-07-30': [block({ completed: true, completedAt: 600 })],
+      }),
+    });
+    const bestHour = WEEKLY_CHALLENGES.find((s) => s.id === 'best-hour')!;
+    const quiet = WEEKLY_CHALLENGES.find((s) => s.id === 'quiet-corner')!;
+    expect(bestHour.done(c, '2026-07-30')).toBe(0);
+    expect(quiet.done(c, '2026-07-30')).toBe(0);
+  });
+
+  it('counts once the facts are there', () => {
+    const c = ctx({
+      profile: { strongestHour: 10, leastTouched: 'admin' },
+      plans: plansOf({
+        '2026-07-30': [
+          block({ id: 'x', completed: true, completedAt: 630 }),
+          block({ id: 'y', completed: true, completedAt: 640, category: 'admin', start: 600, end: 720 }),
+        ],
+      }),
+    });
+    expect(WEEKLY_CHALLENGES.find((s) => s.id === 'best-hour')!.done(c, '2026-07-30')).toBe(2);
+    expect(WEEKLY_CHALLENGES.find((s) => s.id === 'quiet-corner')!.done(c, '2026-07-30')).toBe(120);
+  });
+});
+
+describe('every new spec is satisfiable, one short, and empty-safe', () => {
+  // The bar from the hand-off: a case that satisfies it, a case one short, and an empty
+  // week. Run as a sweep rather than one test each, so adding a spec without a case is
+  // caught by the count assertion below.
+  const empty = ctx();
+
+  it('reports zero on an empty week, for every spec in all three pools', () => {
+    for (const spec of WEEKLY_CHALLENGES) {
+      expect(spec.done(empty, '2026-07-30'), spec.id).toBe(0);
+    }
+    for (const spec of DAILY_CHALLENGES) {
+      expect(spec.done(empty, '2026-07-30'), spec.id).toBe(0);
+    }
+    for (const spec of WILDCARDS) {
+      expect(spec.done(empty), spec.id).toBe(0);
+    }
+  });
+
+  it('never reports negative or fractional progress', () => {
+    const busy = ctx({
+      profile: { strongestHour: 10, leastTouched: 'admin' },
+      streakResetOn: '2026-07-28',
+      stats: Object.fromEntries(
+        DATES.map((d) => [d, stat(d, { doneMinutes: 200, plannedMinutes: 300, cleared: false })])
+      ),
+      plans: plansOf(
+        Object.fromEntries(
+          DATES.map((d) => [
+            d,
+            [block({ completed: true, completedAt: 630, moves: 2 })],
+          ])
+        )
+      ),
+    });
+    for (const spec of [...WEEKLY_CHALLENGES, ...DAILY_CHALLENGES]) {
+      const n = spec.done(busy, '2026-07-30');
+      expect(Number.isFinite(n) && n >= 0 && Number.isInteger(n), spec.id).toBe(true);
+    }
+    for (const spec of WILDCARDS) {
+      const n = spec.done(busy);
+      expect(Number.isFinite(n) && n >= 0 && Number.isInteger(n), spec.id).toBe(true);
+    }
+  });
+
+  it('satisfies a constraint spec when the constraint holds, and not otherwise', () => {
+    const unmoved = ctx({
+      plans: plansOf({
+        '2026-07-30': [
+          block({ id: 'a', completed: true, moves: 0 }),
+          block({ id: 'b', completed: true }),
+        ],
+      }),
+    });
+    const asPlanned = DAILY_CHALLENGES.find((s) => s.id === 'as-planned')!;
+    expect(asPlanned.done(unmoved, '2026-07-30')).toBe(1);
+
+    const moved = ctx({
+      plans: plansOf({
+        '2026-07-30': [
+          block({ id: 'a', completed: true, moves: 1 }),
+          block({ id: 'b', completed: true }),
+        ],
+      }),
+    });
+    expect(asPlanned.done(moved, '2026-07-30')).toBe(0);
+  });
+
+  it('pays recovery only for a clear that followed a short day', () => {
+    const recovered = ctx({
+      stats: {
+        '2026-07-29': stat('2026-07-29', { doneMinutes: 30, plannedMinutes: 300, cleared: false }),
+        '2026-07-30': stat('2026-07-30', { cleared: true }),
+      },
+    });
+    const secondWind = WEEKLY_CHALLENGES.find((s) => s.id === 'second-wind')!;
+    expect(secondWind.done(recovered, '2026-07-30')).toBe(1);
+
+    const steady = ctx({
+      stats: {
+        '2026-07-29': stat('2026-07-29', { cleared: true }),
+        '2026-07-30': stat('2026-07-30', { cleared: true }),
+      },
+    });
+    expect(secondWind.done(steady, '2026-07-30')).toBe(0);
+  });
+
+  it('needs a real week behind the even-hand constraint', () => {
+    // Two blocks in one category is not an imbalance, and calling it one would hand out a
+    // bonus for a quiet week.
+    const thin = ctx({
+      plans: plansOf({ '2026-07-30': [block({ completed: true, category: 'deep' })] }),
+    });
+    expect(WEEKLY_CHALLENGES.find((s) => s.id === 'even-hand')!.done(thin, '2026-07-30')).toBe(0);
   });
 });

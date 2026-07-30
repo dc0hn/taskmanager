@@ -256,6 +256,18 @@ export interface WeekRecord {
    * every day in it. Absent means no character, never a default one.
    */
   character?: string;
+  /**
+   * The challenge and wildcard ids this week drew, sealed on first issue.
+   *
+   * Same reason as `character`: the draw is an index into a content array, and a payout key
+   * embeds the drawn id. Without the seal, appending a challenge re-draws past weeks and the
+   * same day can pay twice under two names.
+   */
+  draws?: {
+    daily: Record<string, string>;
+    weekly: string;
+    wildcards: string[];
+  };
 }
 
 export interface CarryoverItem {

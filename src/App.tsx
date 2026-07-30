@@ -133,6 +133,8 @@ import {
   dailyChallenge,
   questPayout,
   questsFor,
+  sealDraws,
+  profileFacts,
   weeklyChallenge,
 } from './quests';
 import {
@@ -830,9 +832,15 @@ export default function App() {
     //     time because the draw is an index into a content array: extend that array and an
     //     unsealed week resolves differently, re-scoring every day in it. Sealing is what
     //     makes the pool safe to grow.
-    const sealed = sealCharacter(loadWeek(current));
-    if (sealed) {
-      saveWeek(sealed);
+    // 2b) Seal this week's character and its draws, once. Written here rather than derived
+    //     at scoring time because both are indexes into content arrays: extend one and an
+    //     unsealed week resolves differently, re-scoring its days or re-drawing its
+    //     challenges. Sealing is what makes those pools safe to grow.
+    const record = loadWeek(current);
+    const withCharacter = sealCharacter(record) ?? record;
+    const withDraws = sealDraws(withCharacter) ?? withCharacter;
+    if (withDraws !== record) {
+      saveWeek(withDraws);
       setWeekEpoch((n) => n + 1);
     }
 
@@ -1354,29 +1362,6 @@ export default function App() {
    * shows what that week offered. Only the CURRENT week can pay out — see the effect
    * below — because a past week's set is history, not an outstanding mission.
    */
-  const questContext = useMemo(
-    () =>
-      buildWeekContext({
-        weekKey,
-        plans,
-        stats: dayStats,
-        week,
-        habits,
-        marks: dayMarks,
-        markDefs,
-        categories,
-        startedOn: progress.startedOn,
-      }),
-    [weekKey, plans, dayStats, week, habits, dayMarks, markDefs, categories, progress.startedOn]
-  );
-
-  const quests = useMemo(
-    () => questsFor(questContext, { extraWildcard: hasExtraWildcard(shop) }),
-    [questContext, shop]
-  );
-  const daily = useMemo(() => dailyChallenge(questContext, todayKey), [questContext, todayKey]);
-  const weekly = useMemo(() => weeklyChallenge(questContext), [questContext]);
-
   /**
    * A wide trailing window for the codex, in two parts.
    *
@@ -1403,11 +1388,67 @@ export default function App() {
     return { plans: loadPlans(wanted), dates: wanted };
   }, [nav, todayKey, progress.startedOn]);
 
+  /**
+   * Profile-wide facts for the discovery quests.
+   *
+   * Derived from the codex window, which is only loaded while Standing is open — so on the
+   * calendar these are null and the four discovery specs report no progress. That is the
+   * honest failure mode rather than a bug: a discovery quest firing on no data is worse
+   * than one that cannot be finished, and opening Standing is exactly the moment the app
+   * has the history to answer.
+   */
+  const questProfile = useMemo(
+    () => profileFacts(insightWindow.dates.map((d) => ({ date: d, blocks: insightWindow.plans[d]?.blocks ?? [] })), categories),
+    [insightWindow, categories]
+  );
+
+  const questContext = useMemo(
+    () =>
+      buildWeekContext({
+        weekKey,
+        plans,
+        stats: dayStats,
+        week,
+        habits,
+        marks: dayMarks,
+        markDefs,
+        categories,
+        startedOn: progress.startedOn,
+        // The discovery content asks questions a week cannot answer, so the profile-wide
+        // facts come from the same wide window the codex uses. Null fields mean those
+        // specs report no progress rather than resolving to hour zero.
+        profile: questProfile,
+        streakResetOn: streak.lastResetOn,
+      }),
+    [
+      weekKey,
+      plans,
+      dayStats,
+      week,
+      habits,
+      dayMarks,
+      markDefs,
+      categories,
+      progress.startedOn,
+      questProfile,
+      streak.lastResetOn,
+    ]
+  );
+
+  const quests = useMemo(
+    () => questsFor(questContext, { extraWildcard: hasExtraWildcard(shop) }),
+    [questContext, shop]
+  );
+  const daily = useMemo(() => dailyChallenge(questContext, todayKey), [questContext, todayKey]);
+  const weekly = useMemo(() => weeklyChallenge(questContext), [questContext]);
+
+
   const insightContext = useMemo(
     () =>
       buildInsightContext(insightWindow.plans, insightWindow.dates, dayStats, categories),
     [insightWindow, dayStats, categories]
   );
+
 
   const codex = useMemo(
     () => insightStatuses(awards, insightContext),

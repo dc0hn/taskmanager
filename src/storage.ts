@@ -423,7 +423,32 @@ export function loadWeek(weekKey: string): WeekRecord {
     // character this build has never heard of must score as unmodified, not as whichever
     // one happens to sit at index zero.
     character: characterById(str(parsed.character)) ? str(parsed.character) : undefined,
+    draws: normalizeDraws(parsed.draws),
   };
+}
+
+/**
+ * Sealed draws, or nothing.
+ *
+ * All-or-nothing on purpose. A half-read seal would leave some days resolving to their
+ * sealed spec and others re-drawing against today's pool, which is a worse state than
+ * simply having no seal — the point of the record is that a week's answers are consistent
+ * with each other.
+ */
+function normalizeDraws(raw: unknown): WeekRecord['draws'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const d = raw as Record<string, unknown>;
+  if (typeof d.weekly !== 'string' || !d.weekly) return undefined;
+  if (!d.daily || typeof d.daily !== 'object') return undefined;
+  if (!Array.isArray(d.wildcards)) return undefined;
+
+  const daily: Record<string, string> = {};
+  for (const [date, id] of Object.entries(d.daily as Record<string, unknown>)) {
+    if (isDateKey(date) && typeof id === 'string' && id) daily[date] = id;
+  }
+  const wildcards = d.wildcards.filter((x): x is string => typeof x === 'string' && x !== '');
+  if (Object.keys(daily).length === 0 || wildcards.length === 0) return undefined;
+  return { daily, weekly: d.weekly, wildcards };
 }
 
 export function saveWeek(week: WeekRecord): void {
