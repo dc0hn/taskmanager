@@ -390,3 +390,74 @@ describe('permanent upgrades', () => {
     expect(hasExtraWildcard({ ...emptyShop(), owned: ['quest-extra'] })).toBe(true);
   });
 });
+
+describe('prestige stock', () => {
+  const cycled = (prestige: number): UserProgress => ({
+    ...emptyProgress(),
+    brass: 9999,
+    totalXp: CYCLE_XP * prestige + 100,
+  });
+
+  it('refuses before a cycle is complete, and says which reason', () => {
+    const offer = offersFor(emptyShop(), cycled(0), WEEK).find(
+      (o) => o.item.id === 'title-almanacker'
+    )!;
+    expect(offer.canBuy).toBe(false);
+    expect(offer.reason).toBe('prestige');
+  });
+
+  it('stays visible while locked, because that is the point of it', () => {
+    // A reward you cannot see is not one you are working toward.
+    const ids = offersFor(emptyShop(), cycled(0), WEEK).map((o) => o.item.id);
+    expect(ids).toContain('title-almanacker');
+    expect(ids).toContain('finish-meridian');
+  });
+
+  it('opens once a cycle is done', () => {
+    const offer = offersFor(emptyShop(), cycled(1), WEEK).find(
+      (o) => o.item.id === 'title-almanacker'
+    )!;
+    expect(offer.canBuy).toBe(true);
+  });
+});
+
+describe('the instruments and consumables', () => {
+  it('gives every new consumable a stack limit, and respects it', () => {
+    for (const id of ['use-assay', 'use-bench-day', 'use-reprieve', 'use-double-bill']) {
+      const item = itemById(id)!;
+      expect(item.consumable, id).toBe(true);
+      expect(item.stackLimit, id).toBeGreaterThan(0);
+
+      const full = { ...emptyShop(), stock: { [id]: item.stackLimit! } };
+      const offer = offersFor(full, rich(9999), WEEK).find((o) => o.item.id === id)!;
+      expect(offer.reason, id).toBe('stack');
+    }
+  });
+
+  it('treats every instrument as a one-off', () => {
+    for (const id of ['inst-loupe', 'inst-almanac-hand', 'inst-brass-scales']) {
+      const owned = { ...emptyShop(), owned: [id] };
+      const offer = offersFor(owned, rich(9999), WEEK).find((o) => o.item.id === id)!;
+      expect(offer.reason, id).toBe('owned');
+    }
+  });
+
+  it('still sells nothing that buys progress outright', () => {
+    // The rule that outranks every mechanic here.
+    for (const i of CATALOGUE) {
+      expect(i.id).not.toMatch(/level|xp-gift|instant/);
+    }
+  });
+
+  it('does not sell the week strip shadow, which is free', () => {
+    // It shipped free before the catalogue was written, and taking a working feature away
+    // to sell it back would make the shop worse.
+    expect(CATALOGUE.find((i) => i.id === 'inst-second-hand')).toBeUndefined();
+  });
+
+  it('does not sell a retention extension, which would double-count pruned days', () => {
+    // Raising STAT_RETENTION_DAYS makes already-pruned days pass `withinRetention` again,
+    // and reconciliation would read each as a whole day rather than a delta.
+    expect(CATALOGUE.find((i) => i.id === 'inst-ledger-rule')).toBeUndefined();
+  });
+});

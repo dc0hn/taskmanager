@@ -108,6 +108,14 @@ export type ProgressionEvent =
       /** Disciplines to credit, when the producer knows them per key. */
       disciplines?: Partial<Record<DisciplineId, number>>;
       /**
+       * Brass to pay instead of the usual share of XP.
+       *
+       * The assay pays brass and no XP at all, so the default `xp * BRASS_PER_XP` would
+       * pay nothing. Only applied when the offer is actually granted, like everything else
+       * here.
+       */
+      brassOverride?: number;
+      /**
        * Narrate what was paid, as "label · label · +N XP".
        *
        * Built here rather than by the caller for the same reason the streak narration is:
@@ -337,8 +345,21 @@ export function progressionReducer(
 
     case 'AwardsOffered': {
       if (event.payouts.length === 0) return UNCHANGED(state);
-      const { state: next, paid } = applyAwards(state, event.payouts, event.disciplines);
+      const applied = applyAwards(state, event.payouts, event.disciplines);
+      const { paid } = applied;
       if (paid.length === 0) return UNCHANGED(state);
+
+      // Brass paid instead of a share of XP, for awards that are brass-only. Applied after
+      // granting, so an offer the ledger refused pays nothing here either.
+      const next = event.brassOverride
+        ? {
+            ...applied.state,
+            progress: {
+              ...applied.state.progress,
+              brass: applied.state.progress.brass + event.brassOverride,
+            },
+          }
+        : applied.state;
 
       const before = state.progress.totalXp;
       const moments: RewardMoment[] = [];
@@ -354,7 +375,8 @@ export function progressionReducer(
       if (event.note) {
         const labels = paid.map((p) => p.label).filter(Boolean);
         const xp = payoutXp(paid);
-        if (labels.length > 0) notes.push(`${labels.join(' \u00b7 ')} \u00b7 +${xp} XP`);
+        const gain = xp > 0 ? `+${xp} XP` : `+${event.brassOverride ?? 0} brass`;
+        if (labels.length > 0) notes.push(`${labels.join(' \u00b7 ')} \u00b7 ${gain}`);
       }
 
       return { state: next, moments, changed: true, notes };

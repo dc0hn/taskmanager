@@ -47,11 +47,76 @@ export function goalProgress(goal: WeeklyGoal, credits: GoalCredit[]): GoalProgr
   // A stood-down goal is neither met nor missed. It is excluded from carryover
   // and from any deferral penalty — see the note on `voided` in types.ts.
   if (goal.voided) outcome = 'void';
-  else if (done >= target) outcome = 'met';
+  else if (goal.direction === 'atMost') {
+    // A ceiling starts met and is lost by going past. It never reports 'partial': being
+    // half way to a limit is not partial progress, it is simply inside the limit.
+    outcome = done > target ? 'exceeded' : 'met';
+  } else if (done >= target) outcome = 'met';
   else if (done > 0) outcome = 'partial';
   else outcome = 'missed';
 
   return { goal, sessions, minutes, done, target, outcome };
+}
+
+
+/**
+ * Advance, hold or reset a goal's run at the week boundary.
+ *
+ * Three outcomes, and the third is the one that matters: a VOIDED week neither advances nor
+ * resets. Standing something down deliberately is a decision, not a lapse — the same
+ * semantics `voided` already has everywhere else, and a run that broke because you
+ * consciously took a week off would make the feature actively discouraging.
+ *
+ * `best` never falls. A reset costs you the current run and nothing else, which is the same
+ * vocabulary the day-streak uses: fresh start, not failure.
+ */
+export function advanceRun(
+  goal: WeeklyGoal,
+  outcome: GoalOutcome
+): WeeklyGoal['run'] {
+  if (!goal.run) return undefined;
+  if (outcome === 'void') return goal.run;
+
+  if (outcome === 'met') {
+    const current = goal.run.current + 1;
+    return { ...goal.run, current, best: Math.max(goal.run.best, current) };
+  }
+  return { ...goal.run, current: 0 };
+}
+
+/** Award key for a run goal reaching its target. Keyed on target so a longer run pays too. */
+export function goalRunKey(goalId: string, target: number): string {
+  return `goalrun:${goalId}:${target}`;
+}
+
+/** XP a completed run pays. */
+export function goalRunXp(target: number): number {
+  return 40 * target;
+}
+
+/**
+ * Runs that have just reached their target and not yet been paid.
+ *
+ * Read off the goals as they stand after the rollover advanced them, so this is a pure
+ * function of the record rather than of what happened during the walk.
+ */
+export function goalRunPayouts(
+  goals: WeeklyGoal[],
+  granted: string[]
+): { key: string; xp: number; label: string }[] {
+  const out: { key: string; xp: number; label: string }[] = [];
+  for (const g of goals) {
+    if (!g.run) continue;
+    if (g.run.current < g.run.target) continue;
+    const key = goalRunKey(g.id, g.run.target);
+    if (granted.includes(key)) continue;
+    out.push({
+      key,
+      xp: goalRunXp(g.run.target),
+      label: `${g.label} — ${g.run.target} weeks running`,
+    });
+  }
+  return out;
 }
 
 /** Deferral count at which an item should be triaged rather than left to rot. */
@@ -67,7 +132,9 @@ export function weekProgress(week: WeekRecord): GoalProgress[] {
 /** Goals with work still outstanding — what the intake chips offer. */
 export function openGoals(week: WeekRecord): GoalProgress[] {
   return weekProgress(week).filter(
-    (p) => p.outcome !== 'met' && p.outcome !== 'void'
+    // A ceiling is never work to do. Offering an intake chip for one would invite more of
+    // the thing you are trying to hold down, which is the opposite of what it is for.
+    (p) => p.goal.direction !== 'atMost' && p.outcome !== 'met' && p.outcome !== 'void'
   );
 }
 
@@ -173,6 +240,9 @@ export function resolveElapsedWeeks(
     for (const progress of weekProgress(week)) {
       // Met, or deliberately stood down: nothing is owed either way.
       if (progress.outcome === 'met' || progress.outcome === 'void') continue;
+      // A ceiling cannot be carried. There is no residual to owe — going over last week
+      // does not mean you owe yourself a smaller limit this week.
+      if (progress.goal.direction === 'atMost') continue;
       // A weekly goal is reissued at full target by `issueRecurringGoals`, so it
       // must not also sit in the pile — with one record per lineage it would then
       // exist in two places and could be deferred twice for the same week.
@@ -258,8 +328,15 @@ export function issueRecurringGoals(
     additions.push({
       ...goal,
       // Full target, not the remainder: a habit's weekly target is the point.
-      deferrals: progress.outcome === 'met' ? 0 : goal.deferrals + (slipped ? 1 : 0),
+      //
+      // A ceiling never accrues a deferral. Exceeding one is not owing anything, and
+      // stacking friction for it would turn a limit into a punishment.
+      deferrals:
+        goal.direction === 'atMost' || progress.outcome === 'met'
+          ? 0
+          : goal.deferrals + (slipped ? 1 : 0),
       voided: false,
+      run: advanceRun(goal, progress.outcome),
     });
   }
 
@@ -387,6 +464,8 @@ export interface WeekReview {
   missed: GoalProgress[];
   /** Deliberately stood down — reported separately from failure. */
   voided: GoalProgress[];
+  /** Ceiling goals that went past their limit. Never folded into `missed`. */
+  exceeded: GoalProgress[];
 }
 
 /** A sealed week's credits are settled history and must not be rewritten. */
@@ -440,6 +519,10 @@ export function buildWeekReview(
     slipped: goals.filter((g) => g.outcome === 'partial'),
     missed: goals.filter((g) => g.outcome === 'missed'),
     voided: goals.filter((g) => g.outcome === 'void'),
+    // Its own bucket, not folded into `missed`. "Over by forty minutes" is information
+    // about a limit you set yourself; calling it a failure would be the app disagreeing
+    // with its own vocabulary.
+    exceeded: goals.filter((g) => g.outcome === 'exceeded'),
   };
 }
 

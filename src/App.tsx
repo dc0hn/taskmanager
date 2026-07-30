@@ -23,6 +23,7 @@ import {
   type ProgressionStore,
 } from './progression/reducer';
 import { chainPayout, chainStatuses } from './chains';
+import { assay, assayKey } from './assay';
 import { characterOf, sealCharacter } from './characters';
 import {
   currentSeason,
@@ -203,6 +204,7 @@ import {
   dropFromCarryover,
   isSealed,
   issueRecurringGoals,
+  goalRunPayouts,
   openGoals as openGoalsOf,
   pruneCredits,
   pullFromCarryover,
@@ -826,7 +828,13 @@ export default function App() {
     //    (goalId, weekKey), so opening the app repeatedly on a Monday issues one
     //    set rather than one per launch.
     const issued = issueRecurringGoals(current, loadAllWeeks());
-    if (issued) saveWeek(issued);
+    if (issued) {
+      saveWeek(issued);
+      // A run that just reached its target pays once, keyed on the target so a longer run
+      // later still pays. Offered rather than granted here: the ledger decides.
+      const runs = goalRunPayouts(issued.goals, awards.granted);
+      if (runs.length > 0) dispatch({ type: 'AwardsOffered', payouts: runs, note: true });
+    }
 
     // 2b) Seal this week's character, once. Written here rather than derived at scoring
     //     time because the draw is an index into a content array: extend that array and an
@@ -1310,8 +1318,21 @@ export default function App() {
     if (reviewSeen.current === seenKey) return;
     reviewSeen.current = seenKey;
     payBonus(reviewAwardsDue(awards, goalsWeek, currentWeekKey(), review));
+
+    // The assay: paid once per finished week, on the act of looking. Brass only, so it
+    // cannot move a level, and measured against this profile's own recent weeks rather
+    // than an absolute bar.
+    if (goalsWeek < currentWeekKey()) {
+      const appraisal = assay(dayStats, goalsWeek);
+      dispatch({
+        type: 'AwardsOffered',
+        payouts: [{ key: assayKey(goalsWeek), xp: 0, label: appraisal.note }],
+        brassOverride: appraisal.brass,
+        note: true,
+      });
+    }
      
-  }, [awards, progress.startedOn, nav, goalsWeek, review, payBonus]);
+  }, [dayStats, awards, progress.startedOn, nav, goalsWeek, review, payBonus]);
 
   /**
    * Per-day boost multipliers for everything currently loaded.

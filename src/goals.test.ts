@@ -18,6 +18,10 @@ import {
   resolveElapsedWeeks,
   setVoided,
   staleCarryover,
+  advanceRun,
+  goalRunKey,
+  goalRunPayouts,
+  goalRunXp,
 } from './goals';
 import { DEFAULT_CATEGORIES } from './types';
 import type { Block, CarryoverItem, GoalCredit, WeeklyGoal, WeekRecord } from './types';
@@ -759,5 +763,136 @@ describe('buildWeekReview', () => {
     const review = buildWeekReview(emptyWeek(W3), {});
     expect(review).toMatchObject({ doneMinutes: 0, plannedMinutes: 0 });
     expect(review.byCategory).toEqual([]);
+  });
+});
+
+describe('ceiling goals', () => {
+  const ceiling = (over: Partial<WeeklyGoal> = {}) =>
+    goal({ direction: 'atMost', targetKind: 'minutes', target: 300, cadence: 'weekly', ...over });
+
+  const creditsFor = (minutes: number) => [
+    { goalId: 'g1', blockId: 'b1', date: '2026-07-27', minutes },
+  ];
+
+  it('starts met, which is the one bar in this app that starts full', () => {
+    expect(goalProgress(ceiling(), []).outcome).toBe('met');
+  });
+
+  it('stays met right up to the limit', () => {
+    expect(goalProgress(ceiling(), creditsFor(299)).outcome).toBe('met');
+    expect(goalProgress(ceiling(), creditsFor(300)).outcome).toBe('met');
+  });
+
+  it('is exceeded past it, and never reports partial', () => {
+    // Being half way to a limit is not partial progress; it is simply inside the limit.
+    const over = goalProgress(ceiling(), creditsFor(340));
+    expect(over.outcome).toBe('exceeded');
+    expect(goalProgress(ceiling(), creditsFor(150)).outcome).not.toBe('partial');
+  });
+
+  it('is still stood down when voided, whatever the minutes say', () => {
+    expect(goalProgress(ceiling({ voided: true }), creditsFor(999)).outcome).toBe('void');
+  });
+
+  it('never appears as work to do', () => {
+    // An intake chip for a ceiling would invite more of the thing you are holding down.
+    const week: WeekRecord = { week: NOW_WEEK, goals: [ceiling()], credits: [] };
+    expect(openGoals(week)).toEqual([]);
+  });
+
+  it('cannot be carried over', () => {
+    // There is no residual to owe: going over last week does not mean you owe yourself a
+    // smaller limit this week.
+    const week: WeekRecord = {
+      week: W3,
+      goals: [ceiling({ cadence: 'oneOff' })],
+      credits: creditsFor(500),
+    };
+    const r = resolveElapsedWeeks(NOW_WEEK, [week], []);
+    expect(r.carryover).toEqual([]);
+  });
+
+  it('never accrues a deferral', () => {
+    // Stacking friction for exceeding a limit would turn it into a punishment.
+    const prior: WeekRecord = {
+      week: W3,
+      goals: [ceiling({ deferrals: 2 })],
+      credits: creditsFor(500),
+    };
+    const issued = issueRecurringGoals(NOW_WEEK, [prior]);
+    expect(issued!.goals[0].deferrals).toBe(0);
+  });
+
+  it('lands in its own review bucket, not in missed', () => {
+    const week: WeekRecord = { week: W3, goals: [ceiling()], credits: creditsFor(400) };
+    const review = buildWeekReview(week, {});
+    expect(review.exceeded.map((g) => g.goal.id)).toEqual(['g1']);
+    expect(review.missed).toEqual([]);
+    expect(review.met).toEqual([]);
+  });
+});
+
+describe('run goals', () => {
+  const runGoal = (over: Partial<WeeklyGoal> = {}) =>
+    goal({ cadence: 'weekly', run: { target: 4, current: 0, best: 0 }, ...over });
+
+  it('advances on a met week and remembers the best', () => {
+    const g = runGoal({ run: { target: 4, current: 2, best: 2 } });
+    expect(advanceRun(g, 'met')).toEqual({ target: 4, current: 3, best: 3 });
+  });
+
+  it('resets on a missed week but keeps the best', () => {
+    // Same vocabulary as the day-streak: a reset costs the current run and nothing else.
+    const g = runGoal({ run: { target: 4, current: 3, best: 3 } });
+    expect(advanceRun(g, 'missed')).toEqual({ target: 4, current: 0, best: 3 });
+    expect(advanceRun(g, 'partial')).toEqual({ target: 4, current: 0, best: 3 });
+  });
+
+  it('neither advances nor resets on a week stood down', () => {
+    // Standing something down deliberately is a decision, not a lapse — and a run broken by
+    // a week you consciously took off would make the whole feature discouraging.
+    const run = { target: 4, current: 3, best: 3 };
+    expect(advanceRun(runGoal({ run }), 'void')).toEqual(run);
+  });
+
+  it('does nothing at all for a goal with no run', () => {
+    expect(advanceRun(goal(), 'met')).toBeUndefined();
+  });
+
+  it('advances through the weekly reissue', () => {
+    const prior: WeekRecord = {
+      week: W3,
+      goals: [runGoal({ run: { target: 4, current: 1, best: 1 } })],
+      credits: [
+        { goalId: 'g1', blockId: 'b1', date: W3, minutes: 45 },
+        { goalId: 'g1', blockId: 'b2', date: '2026-07-21', minutes: 45 },
+        { goalId: 'g1', blockId: 'b3', date: '2026-07-22', minutes: 45 },
+      ],
+    };
+    const issued = issueRecurringGoals(NOW_WEEK, [prior]);
+    expect(issued!.goals[0].run).toEqual({ target: 4, current: 2, best: 2 });
+  });
+
+  it('pays once on reaching the target, keyed so a longer run still pays', () => {
+    const done = [runGoal({ run: { target: 4, current: 4, best: 4 } })];
+    const due = goalRunPayouts(done, []);
+    expect(due).toHaveLength(1);
+    expect(due[0].key).toBe(goalRunKey('g1', 4));
+    expect(due[0].xp).toBe(goalRunXp(4));
+
+    // Already granted: nothing owed.
+    expect(goalRunPayouts(done, [goalRunKey('g1', 4)])).toEqual([]);
+
+    // A longer target later is a different key, so it can still pay.
+    const longer = [runGoal({ run: { target: 8, current: 8, best: 8 } })];
+    expect(goalRunPayouts(longer, [goalRunKey('g1', 4)])).toHaveLength(1);
+  });
+
+  it('pays nothing short of the target', () => {
+    expect(goalRunPayouts([runGoal({ run: { target: 4, current: 3, best: 3 } })], [])).toEqual([]);
+  });
+
+  it('scales the payout with the target', () => {
+    expect(goalRunXp(2)).toBeLessThan(goalRunXp(6));
   });
 });

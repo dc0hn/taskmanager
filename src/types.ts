@@ -228,6 +228,24 @@ export interface WeeklyGoal {
    * voided goal carries nothing and takes no deferral penalty.
    */
   voided?: boolean;
+  /**
+   * Which way the target points. 'atLeast' is the historical behaviour and the default.
+   *
+   * A ceiling is the only way to say "protect my focus time", and it is something a
+   * calendar can verify that a to-do list cannot. It is also the one place in this app
+   * where a bar starts full: a ceiling is MET BY DEFAULT and lost by exceeding.
+   *
+   * It never deducts anything. Exceeding it simply pays nothing, which is the same
+   * "misses are silent" rule everything else here follows.
+   */
+  direction?: 'atLeast' | 'atMost';
+  /**
+   * Present on a goal that wants consecutive weeks.
+   *
+   * Quests are weekly and day-streaks are a hundred days; run goals sit in the two-to-six
+   * week middle, which is where most real habits are actually won.
+   */
+  run?: { target: number; current: number; best: number };
 }
 
 /**
@@ -287,7 +305,14 @@ export interface CarryoverItem {
   lastProgress: { done: number; target: number };
 }
 
-export type GoalOutcome = 'met' | 'partial' | 'missed' | 'void';
+/**
+ * `exceeded` belongs only to ceiling goals, and is deliberately NOT a synonym for missed.
+ *
+ * The review says "Over by 40 minutes." rather than "failed": going past a limit you set
+ * yourself is information, not a verdict, and nothing in this app phrases a shortfall as
+ * something you did wrong.
+ */
+export type GoalOutcome = 'met' | 'partial' | 'missed' | 'void' | 'exceeded';
 
 // ---------------------------------------------------------------------------
 // Monthly record

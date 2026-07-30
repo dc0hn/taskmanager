@@ -179,6 +179,10 @@ export default function GoalsView({
                   categories.find((x) => x.id === p.goal.category)?.accent ?? '#8b93a7'
                 );
                 const pct = Math.min(100, (p.done / p.target) * 100);
+                // A ceiling is the one place in this app where a bar starts full and is
+                // lost by filling. It recolours past four fifths rather than at the limit,
+                // so the warning arrives while there is still room to act on it.
+                const ceiling = p.goal.direction === 'atMost';
                 return (
                   <div
                     key={p.goal.id}
@@ -241,13 +245,30 @@ export default function GoalsView({
                           {p.goal.label}
                         </div>
                         <div className="font-mono text-[10.5px] text-ink-3 tnum mt-0.5">
-                          {p.goal.targetKind === 'sessions'
-                            ? `${p.done} of ${p.target} sessions`
-                            : `${formatDuration(p.minutes)} of ${formatDuration(
-                                p.target
-                              )}`}
-                          {' · '}
-                          {formatDuration(p.goal.sessionMinutes)} each
+                          {/* A ceiling reads as consumption — "used", not "done" — because
+                              the number going up is the thing you are trying to hold down. */}
+                          {ceiling
+                            ? p.goal.targetKind === 'sessions'
+                              ? `${p.done} of ${p.target} sessions used`
+                              : `${formatDuration(p.minutes)} of ${formatDuration(p.target)} used`
+                            : p.goal.targetKind === 'sessions'
+                              ? `${p.done} of ${p.target} sessions`
+                              : `${formatDuration(p.minutes)} of ${formatDuration(p.target)}`}
+                          {p.outcome === 'exceeded' && (
+                            <span style={{ color: 'var(--signal)' }}>
+                              {' · '}
+                              Over by{' '}
+                              {p.goal.targetKind === 'sessions'
+                                ? `${p.done - p.target}`
+                                : formatDuration(p.minutes - p.target)}
+                            </span>
+                          )}
+                          {!ceiling && (
+                            <>
+                              {' · '}
+                              {formatDuration(p.goal.sessionMinutes)} each
+                            </>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-0.5 shrink-0">
@@ -289,7 +310,15 @@ export default function GoalsView({
                           animate={{ width: `${pct}%` }}
                           transition={{ type: 'spring', stiffness: 120, damping: 26 }}
                           style={{
-                            background: p.outcome === 'met' ? 'var(--good)' : c.accent,
+                            background: ceiling
+                              ? pct >= 100
+                                ? 'var(--signal)'
+                                : pct >= 80
+                                  ? 'var(--warn, var(--signal))'
+                                  : c.accent
+                              : p.outcome === 'met'
+                                ? 'var(--good)'
+                                : c.accent,
                           }}
                         />
                       </div>

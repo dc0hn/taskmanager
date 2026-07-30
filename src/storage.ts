@@ -394,7 +394,34 @@ function normalizeGoal(r: unknown): WeeklyGoal | null {
     deferrals: isFiniteNum(g.deferrals) && g.deferrals >= 0 ? Math.round(g.deferrals) : 0,
     originWeek: isDateKey(g.originWeek) ? g.originWeek : '',
     voided: g.voided === true,
+    // Only that exact string. Anything else is a floor, which is the historical behaviour
+    // and the safe default — reading an unknown value as a ceiling would invert a goal.
+    direction: g.direction === 'atMost' ? 'atMost' : 'atLeast',
+    run: normalizeRun(g.run),
   };
+}
+
+/**
+ * A goal's consecutive-weeks run, or nothing.
+ *
+ * Dropped entirely rather than repaired when the target is unusable: a run of one week is
+ * not a run, and a record claiming one would pay out immediately for a week that had
+ * already happened.
+ */
+function normalizeRun(raw: unknown): WeeklyGoal['run'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  if (!isFiniteNum(r.target)) return undefined;
+  const target = Math.round(r.target);
+  if (target < 2) return undefined;
+
+  const current = isFiniteNum(r.current)
+    ? Math.min(target, Math.max(0, Math.round(r.current)))
+    : 0;
+  // The best run can never be less than the one in progress, the same invariant the
+  // day-streak record holds.
+  const best = isFiniteNum(r.best) ? Math.max(current, Math.round(r.best)) : current;
+  return { target, current, best };
 }
 
 function normalizeCredit(r: unknown): GoalCredit | null {

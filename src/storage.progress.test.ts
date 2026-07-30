@@ -10,6 +10,7 @@ import {
   savePlan,
   saveProgress,
   saveStreak,
+  loadWeek,
 } from './storage';
 import { emptyAwards, emptyStreak } from './streaks';
 import { brassEarned, emptyProgress, reckonDay, wasOnTime } from './progress';
@@ -423,5 +424,77 @@ describe('blocks are bounded to the day on read', () => {
       blocks: [{ id: 'neg', title: 'Negative', start: -60, end: 60, category: 'deep' }],
     });
     expect(loadPlan(DAY).blocks).toEqual([]);
+  });
+});
+
+describe('goal direction and run round trip', () => {
+  const base = {
+    id: 'g1',
+    label: 'Deep work',
+    category: 'deep',
+    targetKind: 'minutes' as const,
+    target: 300,
+    sessionMinutes: 60,
+    cadence: 'weekly' as const,
+    active: true,
+    deferrals: 0,
+    originWeek: '2026-07-27',
+  };
+  const store = (goal: unknown) =>
+    localStorage.setItem(
+      'dp:week:2026-07-27',
+      JSON.stringify({ week: '2026-07-27', goals: [goal], credits: [] })
+    );
+
+  it('keeps a ceiling', () => {
+    store({ ...base, direction: 'atMost' });
+    expect(loadWeek('2026-07-27').goals[0].direction).toBe('atMost');
+  });
+
+  it('reads anything else as a floor', () => {
+    // Reading an unknown value as a ceiling would invert the goal, which is the one
+    // direction this normaliser must never guess in.
+    for (const direction of ['atleast', 'AT_MOST', 42, null, undefined, {}]) {
+      store({ ...base, direction });
+      expect(loadWeek('2026-07-27').goals[0].direction).toBe('atLeast');
+    }
+  });
+
+  it('keeps a well-formed run', () => {
+    store({ ...base, run: { target: 4, current: 2, best: 3 } });
+    expect(loadWeek('2026-07-27').goals[0].run).toEqual({ target: 4, current: 2, best: 3 });
+  });
+
+  it('drops a run whose target is not a run', () => {
+    // A run of one week is not a run, and a record claiming one would pay out immediately
+    // for a week that had already happened.
+    for (const target of [1, 0, -3, 'four', null]) {
+      store({ ...base, run: { target, current: 0, best: 0 } });
+      expect(loadWeek('2026-07-27').goals[0].run).toBeUndefined();
+    }
+  });
+
+  it('drops a run that is not an object at all', () => {
+    for (const run of ['yes', 7, [], null]) {
+      store({ ...base, run });
+      expect(loadWeek('2026-07-27').goals[0].run).toBeUndefined();
+    }
+  });
+
+  it('repairs a corrupt run rather than trusting it', () => {
+    store({ ...base, run: { target: 4, current: 99, best: -5 } });
+    const run = loadWeek('2026-07-27').goals[0].run!;
+    // Current cannot exceed the target, and best can never be below current — the same
+    // invariant the day-streak record holds.
+    expect(run.current).toBe(4);
+    expect(run.best).toBeGreaterThanOrEqual(run.current);
+  });
+
+  it('leaves a goal with neither field usable', () => {
+    store(base);
+    const g = loadWeek('2026-07-27').goals[0];
+    expect(g.direction).toBe('atLeast');
+    expect(g.run).toBeUndefined();
+    expect(g.label).toBe('Deep work');
   });
 });

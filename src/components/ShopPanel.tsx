@@ -44,6 +44,7 @@ function reasonText(offer: Offer, brass: number): string {
     owned: 'owned',
     cap: 'as many as you can hold',
     level: `needs level ${offer.needsLevel}`,
+    prestige: 'needs a completed cycle',
     rotation: 'not in stock this week',
     brass: `${(offer.item.price - brass).toLocaleString()} more brass`,
     stack: `holding ${offer.held} already`,

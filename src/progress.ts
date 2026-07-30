@@ -80,6 +80,28 @@ export const DAY_CLEARED_MIN = 20;
 /** Brass minted per XP. A cycle yields roughly 890 brass. */
 export const BRASS_PER_XP = 0.1;
 
+/**
+ * Brass for a block ticked within `PIECEWORK_TOLERANCE` minutes of its scheduled end.
+ *
+ * The only reward in the app for ESTIMATION rather than volume, which is a genuinely
+ * different skill and the one a planner is actually for. Brass only — no XP — so it cannot
+ * disturb levels, and computed inside `reckonDay` so it reconciles like everything else.
+ *
+ * Distinct from `wasOnTime`, which is `completedAt <= end` and pays XP. This is a tighter,
+ * two-sided window: finishing four hours early is not good estimation either.
+ */
+export const PIECEWORK_BRASS = 8;
+export const PIECEWORK_TOLERANCE = 5;
+
+/** Was this block ticked within the piecework window of its scheduled end? */
+export function toTheMinute(b: Block): boolean {
+  return (
+    b.completed === true &&
+    b.completedAt != null &&
+    Math.abs(b.completedAt - b.end) <= PIECEWORK_TOLERANCE
+  );
+}
+
 /** A block at or over this many minutes counts toward Endurance. */
 export const ENDURANCE_MINUTES = 90;
 
@@ -532,9 +554,24 @@ export function reckonDay(
     }
   }
 
-  // 5) Brass, at the week's rate when its character sets one.
+  // 5) Brass, at the week's rate when its character sets one, plus piecework.
   const brassRate = mods.character?.brassRate ?? BRASS_PER_XP;
-  const brassEarned = xpEarned > 0 ? Math.max(1, Math.round(xpEarned * brassRate)) : 0;
+  const punctual = real.filter(toTheMinute).length;
+  const piecework = punctual * PIECEWORK_BRASS;
+  const brassEarned =
+    xpEarned > 0 ? Math.max(1, Math.round(xpEarned * brassRate)) + piecework : piecework;
+
+  if (piecework > 0) {
+    // Its own line, and it says how many. Brass that appears without an explanation is the
+    // same problem as XP that does.
+    lines.push({
+      id: `${date}:piecework`,
+      label: 'Piecework',
+      xp: 0,
+      minutes: 0,
+      notes: [`${punctual} block${punctual === 1 ? '' : 's'} to the minute`],
+    });
+  }
 
   return {
     stat: {

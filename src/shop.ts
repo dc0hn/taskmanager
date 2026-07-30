@@ -36,6 +36,14 @@ export interface ShopItem {
   /** Minimum overall level before it is offered at all. */
   minLevel?: number;
   /**
+   * Completed cycles required before this is offered.
+   *
+   * Locked prestige stock stays VISIBLE and marked rather than hidden. The point of it is
+   * to give the sigil weight, and a reward you cannot see is not one you are working
+   * toward.
+   */
+  minPrestige?: number;
+  /**
    * Rotating stock. Offered only on weeks where the week index modulo `every`
    * equals `offset`. Absent means always in stock.
    */
@@ -315,6 +323,124 @@ export const CATALOGUE: ShopItem[] = [
     minLevel: 18,
   },
 
+  // ---- instruments: permanent, small, compounding ----
+  //
+  // What gives a long-running profile texture. Deliberately none of them touch scoring:
+  // the two the hand-off proposed that did are addressed in the note at the end of this
+  // block.
+  {
+    id: 'inst-loupe',
+    name: 'Loupe',
+    blurb: 'One more codex card in view at a time',
+    kind: 'utility',
+    price: 600,
+    glyph: 'early-bird',
+  },
+  {
+    id: 'inst-almanac-hand',
+    name: 'Almanac hand',
+    blurb: 'The week strip names each day\u2019s character alongside its load',
+    kind: 'utility',
+    price: 700,
+    glyph: 'big-day',
+  },
+  {
+    id: 'inst-brass-scales',
+    name: 'Brass scales',
+    blurb: 'Brass mints five percent faster, for good',
+    kind: 'utility',
+    price: 1600,
+    glyph: 'flawless',
+    minLevel: 20,
+  },
+
+  // ---- consumables that create a decision, not top-ups ----
+  {
+    id: 'use-assay',
+    name: 'Assay',
+    blurb: 'Name the next badge you have not earned',
+    kind: 'utility',
+    price: 150,
+    glyph: 'first-block',
+    consumable: true,
+    stackLimit: 5,
+  },
+  {
+    id: 'use-bench-day',
+    name: 'Bench day',
+    blurb: 'Name a day ahead. It cannot break a run.',
+    kind: 'utility',
+    price: 250,
+    glyph: 'streak-7',
+    consumable: true,
+    stackLimit: 3,
+  },
+  {
+    id: 'use-reprieve',
+    name: 'Reprieve',
+    blurb: 'Hold yesterday\u2019s run without spending a freeze',
+    kind: 'utility',
+    price: 300,
+    glyph: 'streak-14',
+    consumable: true,
+    stackLimit: 2,
+  },
+  {
+    id: 'use-double-bill',
+    name: 'Double bill',
+    blurb: 'Two wildcards this week instead of one',
+    kind: 'quest',
+    price: 400,
+    glyph: 'big-day',
+    consumable: true,
+    stackLimit: 2,
+  },
+
+  // ---- prestige stock: visible from the start, locked until a cycle is done ----
+  {
+    id: 'title-almanacker',
+    name: 'Title: Almanacker',
+    blurb: 'For a second pass through the ranks',
+    kind: 'cosmetic',
+    price: 1800,
+    glyph: 'prestige-1',
+    minPrestige: 1,
+    slot: 'title',
+    value: 'Almanacker',
+  },
+  {
+    id: 'finish-meridian',
+    name: 'Meridian finish',
+    blurb: 'Only for a cycle completed',
+    kind: 'cosmetic',
+    price: 2200,
+    glyph: 'prestige-1',
+    minPrestige: 1,
+    slot: 'finish',
+    value: '#7fd4ff',
+  },
+
+  /*
+   * THREE ITEMS FROM THE HAND-OFF ARE DELIBERATELY NOT HERE.
+   *
+   *   `inst-second-hand` sold the week strip's trailing four-week shadow for 700 brass.
+   *   That shipped free before this list was written, and taking a working feature away in
+   *   order to sell it back is the one move that would make the shop feel worse.
+   *   `inst-almanac-hand` above fills its slot with something that does not already exist.
+   *
+   *   `inst-ledger-rule` raised STAT_RETENTION_DAYS from 400 to 800. That reintroduces the
+   *   exact bug `withinRetention` exists to prevent: days 401-800 would start passing the
+   *   window again, but their stats were pruned long ago, so reconciliation would find no
+   *   stored figure and add the WHOLE day rather than a delta. Buying it would inflate the
+   *   lifetime total by every pruned day the month view then touched. It needs to raise
+   *   retention forward-only from the purchase date to be safe, which is a different item.
+   *
+   *   `inst-sandglass` widened the punctuality window, which is a scoring input. It would
+   *   have to be sealed per week exactly as a character is, or buying it retroactively
+   *   re-scores every day already recorded. Worth building on top of the sealing that now
+   *   exists; not worth shipping without it.
+   */
+
   // ---- boosters ----
   {
     id: 'boost-day',
@@ -337,7 +463,14 @@ export function itemById(id: string): ShopItem | undefined {
 // Availability and purchase
 // ---------------------------------------------------------------------------
 
-export type Unavailable = 'owned' | 'level' | 'rotation' | 'brass' | 'stack' | 'cap';
+export type Unavailable =
+  | 'owned'
+  | 'level'
+  | 'prestige'
+  | 'rotation'
+  | 'brass'
+  | 'stack'
+  | 'cap';
 
 export interface Offer {
   item: ShopItem;
@@ -387,6 +520,7 @@ export function offersFor(
       // `cap` rather than `owned` once a repeatable upgrade is exhausted, so the
       // message can say "that is as many as you can hold".
       if (!item.consumable && copies >= limit) reason = limit > 1 ? 'cap' : 'owned';
+      else if (item.minPrestige != null && prestige < item.minPrestige) reason = 'prestige';
       else if (item.minLevel != null && effectiveLevel < item.minLevel) reason = 'level';
       else if (!inStock(item, weekKey)) reason = 'rotation';
       else if (item.consumable && held >= (item.stackLimit ?? 1)) reason = 'stack';

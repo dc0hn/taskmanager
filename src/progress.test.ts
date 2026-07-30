@@ -21,6 +21,9 @@ import {
   reconcileDay,
   reconcileDays,
   weekdayMedians,
+  toTheMinute,
+  PIECEWORK_BRASS,
+  PIECEWORK_TOLERANCE,
   scorable,
   SIGIL_FORMS,
   standingFor,
@@ -1050,5 +1053,85 @@ describe('weekdayMedians — the trailing ghost', () => {
     const found = weekdayMedians(stats, [monday, TODAY]);
     expect(found[TODAY]).toBe(1);
     expect(found[monday]).toBeCloseTo(0.2, 5);
+  });
+});
+
+describe('piecework — brass for precision', () => {
+  const at = (completedAt: number | undefined, over: Partial<Block> = {}) =>
+    block({ start: 540, end: 600, completed: completedAt != null, completedAt, ...over });
+
+  it('pays at exactly the tolerance, either side, and not past it', () => {
+    expect(toTheMinute(at(600))).toBe(true);
+    expect(toTheMinute(at(600 + PIECEWORK_TOLERANCE))).toBe(true);
+    expect(toTheMinute(at(600 - PIECEWORK_TOLERANCE))).toBe(true);
+    expect(toTheMinute(at(600 + PIECEWORK_TOLERANCE + 1))).toBe(false);
+    expect(toTheMinute(at(600 - PIECEWORK_TOLERANCE - 1))).toBe(false);
+  });
+
+  it('needs a timestamp and a completion', () => {
+    expect(toTheMinute(at(undefined, { completed: true }))).toBe(false);
+    expect(toTheMinute(at(600, { completed: false }))).toBe(false);
+  });
+
+  it('is two-sided, unlike on-time', () => {
+    // Finishing four hours early is not good estimation either, which is what makes this a
+    // different reward from the on-time weight.
+    const veryEarly = at(400);
+    expect(wasOnTime(veryEarly)).toBe(true);
+    expect(toTheMinute(veryEarly)).toBe(false);
+  });
+
+  it('adds brass and no XP at all', () => {
+    // Compared against a block that is ON TIME but not to the minute — twenty minutes
+    // early. Both earn the on-time weight, so the XP is identical and the only difference
+    // is the piecework.
+    const early = reckonDay('2026-07-30', [at(580)], CATS).stat;
+    const precise = reckonDay('2026-07-30', [at(600)], CATS).stat;
+    expect(precise.xpEarned).toBe(early.xpEarned);
+    expect(precise.brassEarned).toBe(early.brassEarned + PIECEWORK_BRASS);
+  });
+
+  it('pays per block', () => {
+    const two = [
+      at(600, { id: 'a' }),
+      block({ id: 'b', start: 600, end: 660, completed: true, completedAt: 660 }),
+    ];
+    // Both on time, neither to the minute, so the XP matches and only the brass differs.
+    const none = [
+      at(560, { id: 'a' }),
+      block({ id: 'b', start: 600, end: 660, completed: true, completedAt: 620 }),
+    ];
+    const gain = reckonDay('2026-07-30', two, CATS).stat.brassEarned -
+      reckonDay('2026-07-30', none, CATS).stat.brassEarned;
+    expect(gain).toBe(2 * PIECEWORK_BRASS);
+  });
+
+  it('is idempotent across repeated reconciles', () => {
+    // Brass that accumulated per pass rather than being recomputed would drift the moment
+    // the month view was opened twice.
+    const days = [{ date: '2026-07-30', blocks: [at(600)] }];
+    let p = { ...emptyProgress(), startedOn: '2026-07-30' };
+    let stats: Record<string, DailyStat> = {};
+    const first = reconcileDays(p, stats, days, CATS);
+    p = first.progress;
+    stats = first.stats;
+    const second = reconcileDays(p, stats, days, CATS);
+    expect(second.changed).toBe(false);
+    expect(second.progress.brass).toBe(first.progress.brass);
+  });
+
+  it('shows itself as a line, with the count', () => {
+    const r = reckonDay('2026-07-30', [at(600)], CATS);
+    const line = r.lines.find((l) => l.label === 'Piecework');
+    expect(line).toBeDefined();
+    expect(line!.xp).toBe(0);
+    expect(line!.notes[0]).toMatch(/1 block to the minute/);
+  });
+
+  it('pays even on a day that earned no XP, since it is not XP', () => {
+    // Not reachable today — a completed block always earns XP — but the arithmetic should
+    // not depend on that, and the `Math.max(1, ...)` floor is easy to get wrong.
+    const r = reckonDay('2026-07-30', [], CATS);
+    expect(r.stat.brassEarned).toBe(0);
   });
 });

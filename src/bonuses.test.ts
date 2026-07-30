@@ -76,6 +76,7 @@ function review(p: Partial<WeekReview> = {}): WeekReview {
     slipped: [],
     missed: [],
     voided: [],
+  exceeded: [],
     ...p,
   };
 }
