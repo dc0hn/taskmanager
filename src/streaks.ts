@@ -188,10 +188,14 @@ export function resolveStreak(
   stats: Record<string, DailyStat>,
   marks: DayMarks,
   today: string,
-  threshold = STREAK_THRESHOLD
+  threshold = STREAK_THRESHOLD,
+  /** The day scoring began. Days before it never count toward a run. */
+  startedOn = ''
 ): StreakResolution {
-  const dated = Object.keys(stats).sort();
-  const firstKnown = dated[0];
+  const dated = Object.keys(stats)
+    .filter((d) => startedOn === '' || d >= startedOn)
+    .sort();
+  const firstKnown = dated[0] ?? (startedOn || undefined);
 
   let cursor: string;
   if (state.resolvedThrough) {
@@ -215,6 +219,9 @@ export function resolveStreak(
   // day is still correct but bounded so a corrupt date cannot spin.
   const MAX_WALK = 800;
   if (daysBetween(cursor, today) > MAX_WALK) cursor = shiftDay(today, -MAX_WALK);
+  // A resolvedThrough from before a reset must not drag the walk back into the
+  // unscored era.
+  if (startedOn && cursor < startedOn) cursor = startedOn;
 
   let next: StreakState = { ...state, frozenDates: [...state.frozenDates] };
   const days: ResolvedDay[] = [];
@@ -442,4 +449,9 @@ export function biggestStreakMilestone(grantedKeys: string[]): number | null {
 
 export function deservesTakeover(days: number | null): boolean {
   return days != null && STREAK_TAKEOVER_DAYS.includes(days);
+}
+
+/** A run that has never happened, ready to count from `today`. */
+export function resetStreak(today: string): StreakState {
+  return { ...emptyStreak(), resolvedThrough: shiftDay(today, -1), refilledOn: today };
 }

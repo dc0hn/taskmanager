@@ -609,3 +609,56 @@ describe('payout', () => {
     expect(r).toEqual({ keys: [], xp: 0, names: [] });
   });
 });
+
+describe('the scored era', () => {
+  it('drops days before the start date from the week entirely', () => {
+    // Found live: a fresh account was handed a completed wildcard on first launch,
+    // because the current week still held finished blocks from before it started.
+    const plans = plansOf({
+      '2026-07-27': [block({ start: 540, end: 720, completed: true })],
+      '2026-07-28': [block({ start: 540, end: 720, completed: true })],
+      '2026-07-30': [block({ start: 540, end: 600 })],
+    });
+    const gated = buildWeekContext({
+      weekKey: WEEK,
+      plans,
+      stats: {},
+      week: { week: WEEK, goals: [], credits: [] },
+      habits: { templates: [], completions: [] },
+      marks: {},
+      markDefs: DEFAULT_DAY_MARKS,
+      categories: DEFAULT_CATEGORIES,
+      startedOn: '2026-07-30',
+    });
+    expect(gated.dates).toEqual(['2026-07-30', '2026-07-31', '2026-08-01', '2026-08-02']);
+
+    // The long-haul wildcard cannot be satisfied by the two pre-start blocks.
+    const wild = WILDCARDS.find((w) => w.id === 'long-two')!;
+    expect(wild.done(gated)).toBe(0);
+  });
+
+  it('keeps the whole week when no start date is given', () => {
+    const c = ctx();
+    expect(c.dates).toHaveLength(7);
+  });
+
+  it('generates no quests at all from a week entirely before the start', () => {
+    const plans = plansOf({
+      '2026-07-27': [block({ completed: true }), block({ completed: true })],
+    });
+    const gated = buildWeekContext({
+      weekKey: WEEK,
+      plans,
+      stats: {},
+      week: { week: WEEK, goals: [], credits: [] },
+      habits: { templates: [], completions: [] },
+      marks: { '2026-07-27': 'gig' },
+      markDefs: DEFAULT_DAY_MARKS,
+      categories: DEFAULT_CATEGORIES,
+      startedOn: '2026-08-10',
+    });
+    expect(gated.dates).toEqual([]);
+    expect(runQuests(gated)).toEqual([]);
+    expect(heavyDayQuest(gated)).toEqual([]);
+  });
+});

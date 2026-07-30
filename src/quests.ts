@@ -660,6 +660,17 @@ export function buildWeekContext(args: {
   marks: DayMarks;
   markDefs: DayMarkDef[];
   categories: CategoryDef[];
+  /**
+   * The day scoring began. Days before it are dropped from the week entirely.
+   *
+   * Without this a fresh account was handed a completed wildcard on its first launch:
+   * the current week still contained finished blocks from before the start date, and a
+   * quest like "two blocks of ninety minutes" was satisfied the moment it appeared.
+   * Every other layer already measured from the start; this one did not.
+   */
+  startedOn?: string;
 }): WeekContext {
-  return { ...args, dates: weekDates(args.weekKey) };
+  const all = weekDates(args.weekKey);
+  const dates = args.startedOn ? all.filter((d) => d >= args.startedOn!) : all;
+  return { ...args, dates };
 }

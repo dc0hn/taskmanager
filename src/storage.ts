@@ -690,7 +690,13 @@ export function loadProgress(): UserProgress {
     totalXp,
     brass,
     brassSpent: spent,
-    backfilledOn: isDateKey(parsed.backfilledOn) ? parsed.backfilledOn : '',
+    // Records written before the rename carry `backfilledOn`. It meant the same
+    // thing — the day counting began — so it migrates straight across.
+    startedOn: isDateKey(parsed.startedOn)
+      ? parsed.startedOn
+      : isDateKey(parsed.backfilledOn)
+        ? parsed.backfilledOn
+        : '',
     disciplines: banked,
   };
 }

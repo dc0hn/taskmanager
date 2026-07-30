@@ -71,9 +71,12 @@ export const XpFloat = memo(function XpFloat({ award }: { award: FloatingXp | nu
 
 export const LevelToast = memo(function LevelToast({
   standing,
+  pending = 0,
   onDone,
 }: {
   standing: Standing | null;
+  /** How many further level-ups are still queued behind this one. */
+  pending?: number;
   onDone: () => void;
 }) {
   const reduced = useReducedMotion();
@@ -102,6 +105,7 @@ export const LevelToast = memo(function LevelToast({
                 style={{ fontSize: 9.5, letterSpacing: '0.14em', color: 'var(--signal)' }}
               >
                 LEVEL {standing.level}
+                {pending > 0 && ` · ${pending} MORE`}
               </div>
               <div
                 className="font-display"

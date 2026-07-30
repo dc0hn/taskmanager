@@ -457,8 +457,15 @@ export interface UserProgress {
    * figure by several hundred on every launch while the balance stayed correct.
    */
   brassSpent: number;
-  /** Date key the one-time history backfill ran; empty means it hasn't. */
-  backfilledOn: string;
+  /**
+   * The day scoring began. Nothing before it is ever counted.
+   *
+   * Replaces an earlier backfill marker. Scoring the archive gave a new user a level
+   * they had not played for, and a reset that only zeroed the total would silently
+   * re-earn it the next time the month view loaded those days. An explicit start date
+   * is the only thing that makes "from today" mean it.
+   */
+  startedOn: string;
   /**
    * XP accumulated by disciplines that are not derived from blocks.
    *

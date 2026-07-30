@@ -11,6 +11,7 @@ import {
   deservesTakeover,
   emptyAwards,
   emptyStreak,
+  resetStreak,
   KEPT_DAY_BRASS,
   STREAK_MILESTONES,
   FREEZE_REFILL_DAYS,
@@ -546,5 +547,33 @@ describe('which milestones stop the screen', () => {
     expect(deservesTakeover(14)).toBe(false);
     expect(deservesTakeover(60)).toBe(false);
     expect(deservesTakeover(null)).toBe(false);
+  });
+});
+
+describe('resetStreak', () => {
+  const NO_MARKS: DayMarks = {};
+
+  it('settles yesterday so the walk starts clean', () => {
+    const r = resetStreak('2026-07-30');
+    expect(r.current).toBe(0);
+    expect(r.longest).toBe(0);
+    expect(r.resolvedThrough).toBe('2026-07-29');
+    expect(r.consistencyXp).toBe(0);
+  });
+
+  it('does not re-earn history after a reset', () => {
+    // A full archive of kept days, then a reset. Resolution must not walk back into it.
+    const stats = history('2026-07-01', Array.from({ length: 25 }, () => [300, 300] as [number, number]));
+    const fresh = resetStreak('2026-07-26');
+    const r = resolveStreak(fresh, stats, NO_MARKS, '2026-07-30', 0.6, '2026-07-26');
+    // Only the days from the start date onward can count.
+    expect(r.state.current).toBeLessThanOrEqual(4);
+    expect(r.days.every((d) => d.date >= '2026-07-26')).toBe(true);
+  });
+
+  it('ignores stats from before the start date entirely', () => {
+    const stats = history('2026-06-01', Array.from({ length: 40 }, () => [300, 300] as [number, number]));
+    const r = resolveStreak(emptyStreak(), stats, NO_MARKS, '2026-07-10', 0.6, '2026-07-05');
+    expect(r.days.every((d) => d.date >= '2026-07-05')).toBe(true);
   });
 });

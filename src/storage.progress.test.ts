@@ -149,7 +149,7 @@ describe('block field round trip', () => {
 describe('UserProgress round trip', () => {
   it('preserves every field', () => {
     const p: UserProgress = {
-      totalXp: 2240, brass: 214, brassSpent: 676, backfilledOn: '2026-07-30',
+      totalXp: 2240, brass: 214, brassSpent: 676, startedOn: '2026-07-30',
       disciplines: { planning: 120, insight: 50 },
     };
     saveProgress(p);
@@ -162,7 +162,7 @@ describe('UserProgress round trip', () => {
     localStorage.setItem(
       'dp:progress:v1',
       JSON.stringify({
-        totalXp: 10, brass: 0, brassSpent: 0, backfilledOn: '',
+        totalXp: 10, brass: 0, brassSpent: 0, startedOn: '',
         disciplines: { planning: 40, insight: 50, focus: 9999, consistency: 9999, bogus: 5 },
       })
     );
@@ -173,7 +173,7 @@ describe('UserProgress round trip', () => {
     localStorage.setItem(
       'dp:progress:v1',
       JSON.stringify({
-        totalXp: 10, brass: 0, brassSpent: 0, backfilledOn: '',
+        totalXp: 10, brass: 0, brassSpent: 0, startedOn: '',
         disciplines: { planning: -40, insight: 'lots' },
       })
     );
@@ -185,7 +185,7 @@ describe('UserProgress round trip', () => {
     // been spent, so the migration is exact rather than a guess.
     localStorage.setItem(
       'dp:progress:v1',
-      JSON.stringify({ totalXp: 100, brass: 214, brassEarned: 890, backfilledOn: '' })
+      JSON.stringify({ totalXp: 100, brass: 214, brassEarned: 890, startedOn: '' })
     );
     const back = loadProgress();
     expect(back.brassSpent).toBe(676);
@@ -198,7 +198,7 @@ describe('UserProgress round trip', () => {
 
   it('never reports holding more brass than was ever earned', () => {
     // Now true by construction: earned is balance plus spend.
-    saveProgress({ totalXp: 100, brass: 500, brassSpent: 0, backfilledOn: '' });
+    saveProgress({ totalXp: 100, brass: 500, brassSpent: 0, startedOn: '' });
     const back = loadProgress();
     expect(brassEarned(back)).toBeGreaterThanOrEqual(back.brass);
   });
@@ -206,21 +206,30 @@ describe('UserProgress round trip', () => {
   it('clamps negatives rather than trusting them', () => {
     localStorage.setItem(
       'dp:progress:v1',
-      JSON.stringify({ totalXp: -900, brass: -5, brassSpent: -5, backfilledOn: '2026-07-30' })
+      JSON.stringify({ totalXp: -900, brass: -5, brassSpent: -5, startedOn: '2026-07-30' })
     );
     const back = loadProgress();
     expect(back.totalXp).toBe(0);
     expect(back.brass).toBe(0);
   });
 
-  it('rejects a backfill date that names no real day', () => {
+  it('migrates a legacy backfill marker into the start date', () => {
+    // It meant the same thing — the day counting began — so it carries straight across.
+    localStorage.setItem(
+      'dp:progress:v1',
+      JSON.stringify({ totalXp: 10, brass: 0, brassSpent: 0, backfilledOn: '2026-07-01' })
+    );
+    expect(loadProgress().startedOn).toBe('2026-07-01');
+  });
+
+  it('rejects a start date that names no real day', () => {
     // An invalid marker would be treated as "already backfilled" and silently skip
     // scoring the entire archive.
     localStorage.setItem(
       'dp:progress:v1',
-      JSON.stringify({ totalXp: 10, brass: 1, brassSpent: 0, backfilledOn: '2026-02-30' })
+      JSON.stringify({ totalXp: 10, brass: 1, brassSpent: 0, startedOn: '2026-02-30' })
     );
-    expect(loadProgress().backfilledOn).toBe('');
+    expect(loadProgress().startedOn).toBe('');
   });
 
   it('survives a garbage record', () => {

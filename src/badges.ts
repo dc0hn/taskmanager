@@ -420,23 +420,11 @@ export function isPrior(ledger: AwardLedger, id: string): boolean {
   return ledger.granted.includes(priorKey(id));
 }
 
-/**
- * Keys to grant at the epoch: every badge already satisfied, marked prior.
- *
- * Returns no XP by design — the caller pays nothing for these.
- */
-export function sealPriorBadges(
-  ledger: AwardLedger,
-  context: BadgeContext
-): string[] {
-  const keys: string[] = [];
-  for (const badge of BADGES) {
-    if (ledger.granted.includes(badgeKey(badge.id))) continue;
-    if (!badge.test(context)) continue;
-    keys.push(badgeKey(badge.id), priorKey(badge.id));
-  }
-  return keys;
-}
+// `sealPriorBadges` lived here. It granted every already-true badge without paying,
+// to soften a backfill that began a new user mid-progression. Nothing before
+// `startedOn` is scored any more, so no badge can be true on day one and there is
+// nothing to seal. The prior markers above survive only so a record written while
+// the backfill existed still reads honestly.
 
 export function badgeKey(id: string): string {
   return BADGE_KEY_PREFIX + id;

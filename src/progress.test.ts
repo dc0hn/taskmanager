@@ -14,6 +14,8 @@ import {
   prestigedBetween,
   pruneStats,
   withinRetention,
+  isScored,
+  resetProgress,
   RANKS,
   reckonDay,
   reconcileDay,
@@ -49,16 +51,16 @@ function block(p: Partial<Block> = {}): Block {
 
 describe('the level curve', () => {
   it('rises linearly across a cycle', () => {
-    expect(xpForLevel(1)).toBe(60);
-    expect(xpForLevel(2)).toBe(63);
-    expect(xpForLevel(30)).toBe(147);
-    expect(xpForLevel(60)).toBe(237);
+    // Zero-indexed: level 0 is where a fresh account starts, and costs the least.
+    expect(xpForLevel(0)).toBe(60);
+    expect(xpForLevel(1)).toBe(63);
+    expect(xpForLevel(29)).toBe(147);
+    expect(xpForLevel(59)).toBe(237);
   });
 
   it('clamps outside the cycle rather than extrapolating', () => {
-    expect(xpForLevel(0)).toBe(xpForLevel(1));
-    expect(xpForLevel(61)).toBe(xpForLevel(60));
-    expect(xpForLevel(-5)).toBe(xpForLevel(1));
+    expect(xpForLevel(60)).toBe(xpForLevel(59));
+    expect(xpForLevel(-5)).toBe(xpForLevel(0));
   });
 
   it('costs 8,910 XP for a full 60-level cycle', () => {
@@ -68,7 +70,7 @@ describe('the level curve', () => {
 
   it('is cheap enough at the start to level on the first day', () => {
     // A first day of real work should cross several levels, not almost one.
-    expect(xpToReachLevel(4)).toBeLessThan(200);
+    expect(xpToReachLevel(3)).toBeLessThan(200);
   });
 
   it('has exactly one rank name per level', () => {
@@ -87,9 +89,10 @@ describe('the level curve', () => {
 });
 
 describe('standingFor', () => {
-  it('starts at level 1', () => {
+  it('starts at level 0 with nothing earned', () => {
+    // What "starting from scratch" should actually read as.
     const s = standingFor(0);
-    expect(s.level).toBe(1);
+    expect(s.level).toBe(0);
     expect(s.rank).toBe('Apprentice');
     expect(s.prestige).toBe(0);
     expect(s.intoLevel).toBe(0);
@@ -98,27 +101,27 @@ describe('standingFor', () => {
 
   it('reports progress within a level', () => {
     const s = standingFor(30);
-    expect(s.level).toBe(1);
+    expect(s.level).toBe(0);
     expect(s.intoLevel).toBe(30);
     expect(s.levelProgress).toBeCloseTo(0.5, 2);
   });
 
   it('advances a level exactly on the boundary', () => {
-    expect(standingFor(59).level).toBe(1);
-    expect(standingFor(60).level).toBe(2);
+    expect(standingFor(59).level).toBe(0);
+    expect(standingFor(60).level).toBe(1);
     expect(standingFor(60).intoLevel).toBe(0);
   });
 
-  it('reaches level 60 at the last level of the cycle', () => {
-    expect(standingFor(CYCLE_XP - 1).level).toBe(60);
+  it('reaches the last level of the cycle', () => {
+    expect(standingFor(CYCLE_XP - 1).level).toBe(59);
     expect(standingFor(CYCLE_XP - 1).rank).toBe('Grand Reckoner');
     expect(standingFor(CYCLE_XP - 1).prestige).toBe(0);
   });
 
-  it('prestiges into level 1 of the next cycle', () => {
+  it('prestiges into level 0 of the next cycle', () => {
     const s = standingFor(CYCLE_XP);
     expect(s.prestige).toBe(1);
-    expect(s.level).toBe(1);
+    expect(s.level).toBe(0);
     expect(s.rank).toBe('Apprentice');
     expect(s.intoLevel).toBe(0);
   });
@@ -126,7 +129,7 @@ describe('standingFor', () => {
   it('keeps going forever', () => {
     const far = standingFor(CYCLE_XP * 27 + 500);
     expect(far.prestige).toBe(27);
-    expect(far.level).toBeGreaterThan(1);
+    expect(far.level).toBeGreaterThan(0);
     expect(far.rank).toBeTruthy();
   });
 
@@ -139,15 +142,17 @@ describe('standingFor', () => {
     expect(standingFor(CYCLE_XP * (SIGIL_FORMS * 2 + 1)).sigilPips).toBe(2);
   });
 
-  it('flags only every tenth level as a milestone', () => {
-    const levels = [1, 9, 10, 11, 20, 30, 59, 60];
+  it('flags every tenth RANK as a milestone, which is level 9, 19, 29 …', () => {
+    // The arcs are what the sixty names were written to; keeping them intact matters
+    // more than having round numbers on screen.
+    const levels = [0, 8, 9, 10, 19, 29, 58, 59];
     const flags = levels.map((n) => standingFor(xpToReachLevel(n)).milestone);
     expect(flags).toEqual([false, false, true, false, true, true, false, true]);
   });
 
   it('treats a negative or fractional total as zero-ish rather than throwing', () => {
-    expect(standingFor(-500).level).toBe(1);
-    expect(standingFor(60.9).level).toBe(2);
+    expect(standingFor(-500).level).toBe(0);
+    expect(standingFor(60.9).level).toBe(1);
   });
 
   it('never disagrees with itself — level and XP are one fact', () => {
@@ -176,21 +181,21 @@ describe('levelsCrossed', () => {
   it('reports a single crossing', () => {
     const crossed = levelsCrossed(50, 70);
     expect(crossed).toHaveLength(1);
-    expect(crossed[0].level).toBe(2);
+    expect(crossed[0].level).toBe(1);
   });
 
   it('reports every level of a generous day, not just the last', () => {
     // The reason this returns a list: a good day can cross three, and a swallowed
     // level-up is a reward silently lost.
     const crossed = levelsCrossed(0, 200);
-    expect(crossed.map((s) => s.level)).toEqual([2, 3, 4]);
+    expect(crossed.map((s) => s.level)).toEqual([1, 2, 3]);
   });
 
   it('includes the prestige crossing', () => {
     const crossed = levelsCrossed(CYCLE_XP - 10, CYCLE_XP + 10);
     expect(crossed).toHaveLength(1);
     expect(crossed[0].prestige).toBe(1);
-    expect(crossed[0].level).toBe(1);
+    expect(crossed[0].level).toBe(0);
   });
 
   it('does not report a crossing when a level is merely approached', () => {
@@ -198,7 +203,7 @@ describe('levelsCrossed', () => {
   });
 
   it('reports a crossing that lands exactly on a boundary', () => {
-    expect(levelsCrossed(0, 60).map((s) => s.level)).toEqual([2]);
+    expect(levelsCrossed(0, 60).map((s) => s.level)).toEqual([1]);
   });
 });
 
@@ -211,23 +216,23 @@ describe('choosing which crossing to celebrate', () => {
     const startPrestige = standingFor(CYCLE_XP - 60).prestige;
     const prestigeCrossing = crossed.find((c) => c.prestige > startPrestige);
     expect(prestigeCrossing).toBeDefined();
-    expect(prestigeCrossing!.level).toBe(1);
+    expect(prestigeCrossing!.level).toBe(0);
     // The last crossing is NOT the one to show.
-    expect(crossed[crossed.length - 1].level).toBeGreaterThan(1);
+    expect(crossed[crossed.length - 1].level).toBeGreaterThan(0);
   });
 
   it('prefers the highest arc capstone when several levels are crossed', () => {
-    // Levels 9, 10 and 11 in one go: 10 is the one that matters.
-    const from = xpToReachLevel(9);
-    const crossed = levelsCrossed(from, xpToReachLevel(12) - 1);
+    // Levels 8, 9 and 10 in one go: 9 is the arc capstone (the tenth rank).
+    const from = xpToReachLevel(8);
+    const crossed = levelsCrossed(from, xpToReachLevel(11) - 1);
     const milestone = [...crossed].reverse().find((c) => c.milestone);
-    expect(milestone?.level).toBe(10);
+    expect(milestone?.level).toBe(9);
   });
 
   it('falls back to the last level when no capstone was crossed', () => {
-    const crossed = levelsCrossed(xpToReachLevel(11), xpToReachLevel(13) - 1);
+    const crossed = levelsCrossed(xpToReachLevel(10), xpToReachLevel(12) - 1);
     expect(crossed.some((c) => c.milestone)).toBe(false);
-    expect(crossed[crossed.length - 1].level).toBe(12);
+    expect(crossed[crossed.length - 1].level).toBe(11);
   });
 });
 
@@ -816,5 +821,55 @@ describe('areaTotals', () => {
 
   it('is empty for no days', () => {
     expect(areaTotals([], CATS)).toEqual({ byCategory: {}, byDiscipline: {} });
+  });
+});
+
+describe('the scored era', () => {
+  // The guard that makes "starting from today" mean it. Without it, zeroing the total
+  // left every past day unscored-but-scoreable, so the next visit to the month view
+  // earned the whole archive back.
+  it('scores nothing at all before a start date is set', () => {
+    expect(isScored('2026-07-30', '')).toBe(false);
+    expect(isScored('2020-01-01', '')).toBe(false);
+  });
+
+  it('scores the start day itself and everything after', () => {
+    expect(isScored('2026-07-30', '2026-07-30')).toBe(true);
+    expect(isScored('2026-07-31', '2026-07-30')).toBe(true);
+  });
+
+  it('never scores a day before the start', () => {
+    expect(isScored('2026-07-29', '2026-07-30')).toBe(false);
+    expect(isScored('2019-01-01', '2026-07-30')).toBe(false);
+  });
+});
+
+describe('resetProgress', () => {
+  it('returns to nothing and stamps a new start', () => {
+    const reset = resetProgress('2026-07-30');
+    expect(reset.totalXp).toBe(0);
+    expect(reset.brass).toBe(0);
+    expect(reset.brassSpent).toBe(0);
+    expect(reset.startedOn).toBe('2026-07-30');
+    expect(reset.disciplines).toEqual({});
+  });
+
+  it('lands at level 0 with nothing banked', () => {
+    const s = standingFor(resetProgress('2026-07-30').totalXp);
+    expect(s.level).toBe(0);
+    expect(s.prestige).toBe(0);
+    expect(s.intoLevel).toBe(0);
+    expect(s.rank).toBe(RANKS[0]);
+  });
+
+  it('cannot be undone by reconciliation finding old days', () => {
+    // The failure this guards against, stated as a sequence: reset, then a past day
+    // gets loaded and reconciled. It must contribute nothing.
+    const reset = resetProgress('2026-07-30');
+    const before = '2026-07-01';
+    expect(isScored(before, reset.startedOn)).toBe(false);
+
+    // And a day on or after the start still counts, so the reset is not a freeze.
+    expect(isScored('2026-07-30', reset.startedOn)).toBe(true);
   });
 });

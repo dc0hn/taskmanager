@@ -86,6 +86,7 @@ import { QuestDoneToast } from './components/QuestBoard';
 import { CodexUnlockToast } from './components/CodexPanel';
 import {
   boostFor,
+  emptyShop,
   equip as equipItem,
   freezeCapacity,
   hasExtraWildcard,
@@ -116,17 +117,16 @@ import {
   planAheadDue,
   reviewAwardsDue,
 } from './bonuses';
+import { emptyAwards } from './streaks';
 import {
   badgeById,
   badgeContext,
   badgeIdFromKey,
   badgeStatuses,
   evaluateBadges,
-  sealPriorBadges,
 } from './badges';
 import {
   areaTotals,
-  emptyProgress,
   LEVELS_PER_CYCLE,
   RANKS,
   levelsCrossed,
@@ -136,6 +136,8 @@ import {
   xpForBlock,
   reconcileDays,
   standingFor,
+  isScored,
+  resetProgress,
   withinRetention,
   type Standing,
 } from './progress';
@@ -152,11 +154,11 @@ import {
   deservesTakeover,
   FREEZE_CAPACITY,
   displayRun,
-  emptyAwards,
-  emptyStreak,
   grantAwards,
+  resetStreak,
   resolveStreak,
   routineAwardsDue,
+  STREAK_THRESHOLD,
   todayQualifies,
 } from './streaks';
 import {
@@ -279,7 +281,15 @@ export default function App() {
   // Reward presentation. Three queues rather than one flag, because a single
   // generous day can cross several levels and each deserves its own moment.
   const [xpFloat, setXpFloat] = useState<FloatingXp | null>(null);
-  const [levelToast, setLevelToast] = useState<Standing | null>(null);
+  /**
+   * Level-ups queue rather than replace.
+   *
+   * One completion awards XP in several stages — the block, then badges, then a
+   * challenge — and each stage can cross a level. A single slot meant the later
+   * crossings stomped the earlier ones, so a jump from level 0 to 6 announced whichever
+   * toast happened to be mounted rather than where you ended up.
+   */
+  const [levelQueue, setLevelQueue] = useState<Standing[]>([]);
   const [takeover, setTakeover] = useState<{ standing: Standing; prestige: boolean } | null>(null);
   const [sfxOn, setSfxOn] = useState(false);
   const [runKept, setRunKept] = useState<{ run: number; seed: number } | null>(null);
@@ -302,10 +312,11 @@ export default function App() {
   }, [xpFloat]);
 
   useEffect(() => {
-    if (!levelToast) return;
-    const id = setTimeout(() => setLevelToast(null), 3400);
+    if (levelQueue.length === 0) return;
+    // Shorter than the badge queue: these are frequent and each says one word.
+    const id = setTimeout(() => setLevelQueue((q) => q.slice(1)), 2200);
     return () => clearTimeout(id);
-  }, [levelToast]);
+  }, [levelQueue]);
 
   useEffect(() => {
     if (!runKept) return;
@@ -544,64 +555,23 @@ export default function App() {
   // -------------------------------------------------------------------------
   // Progression
   //
-  // The one-time backfill, then a per-day reconcile that runs on every change.
+  // A start date, then a per-day reconcile that runs on every change.
   //
-  // Both go through the same idempotent path: a day's XP is recomputed from its
-  // blocks and only the *difference* against the stored figure moves the lifetime
-  // total. That is what makes it safe to run this on every render pass — and it is
-  // the same discipline that goal credits needed after getting it wrong once.
+  // There used to be a backfill here that scored the whole archive on first run, so
+  // an existing user began at the level their history had already earned. That was
+  // wrong in a way that only showed up later: it handed over a level nobody had
+  // played for, and it made a reset impossible to mean — zeroing the total left every
+  // past day unscored-but-scoreable, so the next month-view visit earned it all again.
+  //
+  // Now nothing before `startedOn` is ever counted. Reconciliation is still
+  // idempotent: a day's XP is recomputed from its blocks and only the *difference*
+  // against the stored figure moves the lifetime total, so this is safe to run on
+  // every render pass.
   // -------------------------------------------------------------------------
   useEffect(() => {
-    if (progress.backfilledOn) return;
-    // Score the whole archive once, so an existing user starts at the level their
-    // real work has already earned rather than at zero. XP only — badges stay
-    // sealed so every one of them is still a live surprise.
-    // The archive is scored in full — every day of it counts toward the lifetime
-    // total — but only days inside the retention window keep a stat afterwards, so
-    // nothing outside it can ever be reconciled a second time.
-    const dates = listPlanDates();
-    const days = dates.map((d) => ({ date: d, blocks: loadPlan(d).blocks }));
-    const result = reconcileDays(emptyProgress(), {}, days, categories);
-    const stats = pruneStats(result.stats, todayKey);
-    const seeded = { ...result.progress, backfilledOn: todayKey };
-
-    // Resolve the streak here too, so the badge seal below sees a complete picture.
-    // Split across effects it would seal the level badges but not the streak ones,
-    // and the stragglers would then pop as live unlocks minutes later.
-    const streakResult = resolveStreak(emptyStreak(), stats, dayMarks, todayKey);
-
-    // Seal everything already true. Recorded as earned, paid nothing — see
-    // `sealPriorBadges` for why leaving them locked would be its own kind of lie.
-    const sealKeys = sealPriorBadges(
-      emptyAwards(),
-      badgeContext({
-        progress: seeded,
-        streak: streakResult.state,
-        stats,
-        marks: dayMarks,
-        todayBlocks: loadPlan(todayKey).blocks,
-        categories,
-        today: todayKey,
-        epoch: todayKey,
-        comebackToday: false,
-      })
-    );
-
-    setProgress(seeded);
-    setDayStats(stats);
-    setStreak(streakResult.state);
-    if (sealKeys.length > 0) setAwards(grantAwards(emptyAwards(), sealKeys).ledger);
-
-    if (seeded.totalXp > 0) {
-      const s = standingFor(seeded.totalXp);
-      const sealed = sealKeys.filter((k) => k.startsWith('badge:')).length;
-      setToast(
-        `Prior service counted — ${seeded.totalXp.toLocaleString()} XP from ${dates.length} recorded day${dates.length === 1 ? '' : 's'}. You start as ${s.rank}, level ${s.level}` +
-          (sealed > 0
-            ? `, with ${sealed} badge${sealed === 1 ? '' : 's'} already on the shelf.`
-            : '.')
-      );
-    }
+    if (progress.startedOn) return;
+    // First run. Begin at nothing, counting from today.
+    setProgress((p) => ({ ...p, startedOn: todayKey }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -631,7 +601,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     // Two guards, both load-bearing.
     //
     // `withinRetention` stops a pruned day being reconciled, which would read its
@@ -643,7 +613,12 @@ export default function App() {
     // rescored once its blocks arrive. The balance came out right because the two
     // deltas cancelled, which is exactly why it went unnoticed.
     const days = authoritativeDates
-      .filter((d) => withinRetention(d, todayKey) && plansRef.current[d] != null)
+      .filter(
+        (d) =>
+          isScored(d, progressRef.current.startedOn) &&
+          withinRetention(d, todayKey) &&
+          plansRef.current[d] != null
+      )
       .map((d) => ({ date: d, blocks: plansRef.current[d]!.blocks }));
     const boosts = Object.fromEntries(days.map((d) => [d.date, boostFor(shopRef.current, d.date)]));
     const before = progressRef.current.totalXp;
@@ -682,7 +657,9 @@ export default function App() {
       setTakeover({ standing: milestoneCrossing, prestige: false });
       sfxMilestone();
     } else {
-      setLevelToast(celebrate);
+      // Only the level actually arrived at, not every step to it: a burst of six
+      // toasts for one completion is noise, and the last one is the news.
+      setLevelQueue((q) => [...q, celebrate]);
       sfxLevel();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -705,12 +682,19 @@ export default function App() {
   awardsRef.current = awards;
 
   useEffect(() => {
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     const withCapacity = {
       ...streakRef.current,
       capacity: freezeCapacity(shopRef.current, FREEZE_CAPACITY),
     };
-    const result = resolveStreak(withCapacity, statsRef.current, dayMarks, todayKey);
+    const result = resolveStreak(
+      withCapacity,
+      statsRef.current,
+      dayMarks,
+      todayKey,
+      STREAK_THRESHOLD,
+      progressRef.current.startedOn
+    );
     if (!result.changed && result.state.capacity === streakRef.current.capacity) return;
 
     setStreak(result.state);
@@ -815,7 +799,7 @@ export default function App() {
    * bonus is for the outcome, not for one particular route to it.
    */
   useEffect(() => {
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     payBonus(planAheadDue(awardsRef.current, plansRef.current, todayKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayFingerprint, todayKey, payBonus]);
@@ -827,12 +811,11 @@ export default function App() {
    * grant goes through the award ledger, so a condition that stays true forever —
    * "reach level 5" — pays exactly once however many times this is evaluated.
    *
-   * `backfilledOn` doubles as the epoch: counting badges measure from the day
-   * tracking began, so the archive that was backfilled for XP cannot pre-unlock
-   * achievements it was never meant to.
+   * `startedOn` is the epoch: counting badges measure from the day scoring began, so
+   * a calendar full of older work cannot pre-unlock achievements it never earned.
    */
   useEffect(() => {
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     const context = badgeContext({
       progress: progressRef.current,
       streak: streakRef.current,
@@ -841,7 +824,7 @@ export default function App() {
       todayBlocks: plansRef.current[todayKey]?.blocks ?? [],
       categories,
       today: todayKey,
-      epoch: progressRef.current.backfilledOn,
+      epoch: progressRef.current.startedOn,
       comebackToday: comebackTodayRef.current,
     });
     const due = evaluateBadges(awardsRef.current, context);
@@ -1006,7 +989,7 @@ export default function App() {
    */
   useEffect(() => {
     if (nav !== 'goals') return;
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     const seenKey = `${goalsWeek}`;
     if (reviewSeen.current === seenKey) return;
     reviewSeen.current = seenKey;
@@ -1064,8 +1047,9 @@ export default function App() {
         marks: dayMarks,
         markDefs,
         categories,
+        startedOn: progress.startedOn,
       }),
-    [weekKey, plans, dayStats, week, habits, dayMarks, markDefs, categories]
+    [weekKey, plans, dayStats, week, habits, dayMarks, markDefs, categories, progress.startedOn]
   );
 
   const quests = useMemo(
@@ -1090,10 +1074,12 @@ export default function App() {
       addDays(todayKey, i - (INSIGHT_WINDOW_DAYS - 1))
     );
     const stored = new Set(listPlanDates());
-    const wanted = dates.filter((d) => stored.has(d));
+    // Only the scored era. An insight drawn from days before you started would pay XP
+    // for history the rest of the system deliberately ignores.
+    const wanted = dates.filter((d) => stored.has(d) && isScored(d, progress.startedOn));
     return buildInsightContext(loadPlans(wanted), wanted, dayStats, categories);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nav, todayKey, dayStats, categories]);
+  }, [nav, todayKey, dayStats, categories, progress.startedOn]);
 
   const codex = useMemo(
     () => insightStatuses(awards, insightContext),
@@ -1111,7 +1097,7 @@ export default function App() {
    */
   useEffect(() => {
     if (nav !== 'standing') return;
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     const due = unlocksDue(awardsRef.current, insightContext);
     if (due.keys.length === 0) return;
 
@@ -1180,6 +1166,37 @@ export default function App() {
     [weekKey, shopOffers]
   );
 
+  /**
+   * Start again from nothing, counting from today.
+   *
+   * Clears every earned figure at once — XP, brass, the day ledger, the run, the award
+   * ledger and the shop — and stamps a new start date. That last part is what makes it
+   * stick: without it, reconciliation would find unscored days in the past and earn
+   * them all back on the next visit to the month view.
+   *
+   * Deliberately does NOT touch plans, goals, routines, categories or day marks. Those
+   * are your work, not your score.
+   */
+  const handleResetProgress = useCallback(() => {
+    setProgress(resetProgress(todayKey));
+    setDayStats({});
+    setStreak(resetStreak(todayKey));
+    setAwards(emptyAwards());
+    setShop(emptyShop());
+    setBadgeQueue([]);
+    setCodexQueue([]);
+    setQuestQueue([]);
+    setLevelQueue([]);
+    setTakeover(null);
+    setRunTakeover(null);
+    setRunKept(null);
+    keptTodayRef.current = null;
+    reviewSeen.current = '';
+    comebackTodayRef.current = false;
+    setToast('Standing reset. Level 0, nothing earned — counting from today.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayKey]);
+
   const handleEquip = useCallback((itemId: string) => {
     setShop((s) => equipItem(s, itemId));
   }, []);
@@ -1237,7 +1254,7 @@ export default function App() {
    * one that was never earned in the present.
    */
   useEffect(() => {
-    if (!progressRef.current.backfilledOn) return;
+    if (!progressRef.current.startedOn) return;
     if (weekKey !== currentWeekKey()) return;
     const due = questPayout(awardsRef.current, quests, [daily, weekly]);
     if (due.keys.length === 0) return;
@@ -1286,7 +1303,7 @@ export default function App() {
           todayBlocks: plans[todayKey]?.blocks ?? [],
           categories,
           today: todayKey,
-          epoch: progress.backfilledOn,
+          epoch: progress.startedOn,
           comebackToday: false,
         })
       ),
@@ -2111,6 +2128,7 @@ export default function App() {
               badges={badges}
               shop={shop}
               shopOffers={shopOffers}
+              onResetProgress={handleResetProgress}
               onBuy={handleBuy}
               onEquipItem={handleEquip}
               onUnequipSlot={handleUnequip}
@@ -2236,7 +2254,11 @@ export default function App() {
         queue={badgeQueue}
         onDone={() => setBadgeQueue((q) => q.slice(1))}
       />
-      <LevelToast standing={levelToast} onDone={() => setLevelToast(null)} />
+      <LevelToast
+        standing={levelQueue[0] ?? null}
+        pending={Math.max(0, levelQueue.length - 1)}
+        onDone={() => setLevelQueue((q) => q.slice(1))}
+      />
       <LevelTakeover
         standing={takeover?.standing ?? null}
         current={standing}

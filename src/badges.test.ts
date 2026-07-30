@@ -16,7 +16,6 @@ import {
   nextUp,
   priorKey,
   standalone,
-  sealPriorBadges,
   sortForDisplay,
   weekdayRun,
   type BadgeContext,
@@ -463,67 +462,26 @@ describe('the library view', () => {
   });
 });
 
-describe('sealing what was already true', () => {
-  it('seals a satisfied badge and pays nothing for it', () => {
-    // On first launch a backfilled user dumped seven badges and two thousand
-    // unearned XP the moment the window opened. Sealing records them without paying.
-    const keys = sealPriorBadges(NONE, ctx({ level: 60, prestige: 1, streakLongest: 30 }));
-    expect(keys).toContain(badgeKey('level-25'));
-    expect(keys).toContain(priorKey('level-25'));
-    expect(keys).toContain(badgeKey('prestige-1'));
-    // Both a badge key and a prior marker for each, so nothing is double counted.
-    expect(keys.filter((k) => k.startsWith('badge:')).length).toBe(
-      keys.filter((k) => k.startsWith('prior:')).length
-    );
+describe('nothing is earned before scoring begins', () => {
+  it('keeps the prior marker readable for records written under the old backfill', () => {
+    // The seal mechanism is gone — nothing before `startedOn` is scored, so no badge
+    // can be true on day one. But a ledger written while it existed still holds prior
+    // markers, and relabelling those as freshly earned would be a small lie.
+    const legacy: AwardLedger = { granted: [badgeKey('level-25'), priorKey('level-25')] };
+    const status = badgeStatuses(legacy, ctx({ level: 25 })).find(
+      (x) => x.def.id === 'level-25'
+    )!;
+    expect(status.earned).toBe(true);
+    expect(status.prior).toBe(true);
   });
 
-  it('seals nothing that is not yet true', () => {
-    const keys = sealPriorBadges(NONE, ctx({ level: 3 }));
-    expect(keys).not.toContain(badgeKey('level-5'));
-    expect(keys).not.toContain(badgeKey('streak-7'));
+  it('treats a live unlock as not prior', () => {
+    expect(isPrior({ granted: [badgeKey('flawless')] }, 'flawless')).toBe(false);
   });
 
-  it('seals nothing at all for a genuinely new user', () => {
-    expect(sealPriorBadges(NONE, ctx())).toEqual([]);
-  });
-
-  it('leaves a sealed badge unable to pay later', () => {
-    const sealed = { granted: sealPriorBadges(NONE, ctx({ level: 25 })) };
-    // Still true, still satisfied — and still worth nothing, because it is held.
-    expect(evaluateBadges(sealed, ctx({ level: 60 })).ids).not.toContain('level-25');
-  });
-
-  it('marks a sealed badge as prior, and a live one as not', () => {
-    const sealed = { granted: sealPriorBadges(NONE, ctx({ level: 25 })) };
-    expect(isPrior(sealed, 'level-25')).toBe(true);
-
-    const live = { granted: [badgeKey('flawless')] };
-    expect(isPrior(live, 'flawless')).toBe(false);
-  });
-
-  it('reports prior status through the library view', () => {
-    const sealed = { granted: sealPriorBadges(NONE, ctx({ level: 25 })) };
-    const statuses = badgeStatuses(sealed, ctx({ level: 25 }));
-    const quarter = statuses.find((s) => s.def.id === 'level-25')!;
-    expect(quarter.earned).toBe(true);
-    expect(quarter.prior).toBe(true);
-
-    const tenDown = statuses.find((s) => s.def.id === 'blocks-10')!;
-    expect(tenDown.earned).toBe(false);
-    expect(tenDown.prior).toBe(false);
-  });
-
-  it('still counts sealed badges as earned — they genuinely were', () => {
-    const sealed = { granted: sealPriorBadges(NONE, ctx({ level: 25, prestige: 1 })) };
-    expect(earnedCount(sealed)).toBeGreaterThan(0);
-  });
-
-  it('does not seal a counting badge the epoch already excluded', () => {
-    // Blocks completed is measured from the epoch, so it reads zero on day one and
-    // there is nothing to seal — the badge stays live and earnable.
-    const keys = sealPriorBadges(NONE, ctx({ blocksCompleted: 0, level: 60 }));
-    expect(keys).not.toContain(badgeKey('first-block'));
-    expect(keys).not.toContain(badgeKey('blocks-250'));
+  it('counts a prior badge as earned — it genuinely was', () => {
+    const legacy: AwardLedger = { granted: [badgeKey('level-25'), priorKey('level-25')] };
+    expect(earnedCount(legacy)).toBe(1);
   });
 });
 
@@ -561,7 +519,10 @@ describe('ladders', () => {
   it('counts only what was genuinely paid, not sealed rungs', () => {
     // A sealed rung was recorded without payment, so it must not appear in a total
     // labelled as XP earned.
-    const sealed = { granted: sealPriorBadges(NONE, ctx({ level: 25 })) };
+    // Built by hand now that nothing seals automatically — a legacy ledger shape.
+    const sealed = {
+      granted: ['level-5', 'level-10', 'level-25'].flatMap((id) => [badgeKey(id), priorKey(id)]),
+    };
     const levels = laddersOf(badgeStatuses(sealed, ctx({ level: 25 }))).find(
       (l) => l.id === 'levels'
     )!;

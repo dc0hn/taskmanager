@@ -90,26 +90,28 @@ export const ENDURANCE_MINUTES = 90;
 export const LEVELS_PER_CYCLE = 60;
 
 /**
- * XP to clear level n, for n in 1..60. Linear so the pace stays legible: early
- * levels arrive in hours, level 60 costs four times level 1, and the whole cycle
- * is a month's honest work rather than a year's.
+ * XP to clear level n, for n in 0..59.
+ *
+ * Levels are zero-indexed: you begin at level 0 with nothing earned, which is what
+ * "starting from scratch" should actually read as. Linear so the pace stays legible —
+ * level 0 costs 60, level 59 costs 237, and the whole cycle is a month's honest work.
  */
 export function xpForLevel(n: number): number {
-  const clamped = Math.min(Math.max(1, Math.round(n)), LEVELS_PER_CYCLE);
-  return 60 + 3 * (clamped - 1);
+  const clamped = Math.min(Math.max(0, Math.round(n)), LEVELS_PER_CYCLE - 1);
+  return 60 + 3 * clamped;
 }
 
 /** XP to go from the start of a cycle to the start of level n. */
 export function xpToReachLevel(n: number): number {
   let sum = 0;
-  for (let i = 1; i < Math.min(Math.max(1, Math.round(n)), LEVELS_PER_CYCLE + 1); i++) {
+  for (let i = 0; i < Math.min(Math.max(0, Math.round(n)), LEVELS_PER_CYCLE); i++) {
     sum += xpForLevel(i);
   }
   return sum;
 }
 
 /** Total XP in one full 60-level cycle. 8,910. */
-export const CYCLE_XP = xpToReachLevel(LEVELS_PER_CYCLE + 1);
+export const CYCLE_XP = xpToReachLevel(LEVELS_PER_CYCLE);
 
 /**
  * Sixty rank names, one per level, in six arcs of ten.
@@ -147,7 +149,7 @@ export const RANKS: string[] = [
 export const SIGIL_FORMS = 8;
 
 export interface Standing {
-  /** Level within the current cycle, 1..60. */
+  /** Level within the current cycle, 0..59. Zero means nothing earned yet. */
   level: number;
   rank: string;
   /** Completed 60-level cycles. */
@@ -179,8 +181,8 @@ export function standingFor(totalXp: number): Standing {
   const prestige = Math.floor(xp / CYCLE_XP);
   let remaining = xp - prestige * CYCLE_XP;
 
-  let level = 1;
-  while (level < LEVELS_PER_CYCLE && remaining >= xpForLevel(level)) {
+  let level = 0;
+  while (level < LEVELS_PER_CYCLE - 1 && remaining >= xpForLevel(level)) {
     remaining -= xpForLevel(level);
     level++;
   }
@@ -188,7 +190,7 @@ export function standingFor(totalXp: number): Standing {
 
   return {
     level,
-    rank: RANKS[level - 1] ?? RANKS[RANKS.length - 1],
+    rank: RANKS[level] ?? RANKS[RANKS.length - 1],
     prestige,
     sigilForm: prestige % SIGIL_FORMS,
     sigilPips: Math.floor(prestige / SIGIL_FORMS),
@@ -196,7 +198,10 @@ export function standingFor(totalXp: number): Standing {
     intoLevel: remaining,
     levelCost,
     levelProgress: levelCost > 0 ? Math.min(1, remaining / levelCost) : 0,
-    milestone: level % 10 === 0,
+    // Capstones are the tenth, twentieth … sixtieth RANK, which with zero-indexed
+    // levels lands on 9, 19 … 59. Keeping the arcs intact matters more than having
+    // the round numbers on screen, since the arcs are what the names were written to.
+    milestone: (level + 1) % 10 === 0,
   };
 }
 
@@ -591,6 +596,23 @@ export function withinRetention(
   return date >= shiftDateKey(today, -retentionDays) && date <= shiftDateKey(today, 1);
 }
 
+/**
+ * Is this day inside the scored era?
+ *
+ * The counterpart to `withinRetention`, and the thing that makes a reset stick. A
+ * total that was merely zeroed would climb straight back the next time the month view
+ * loaded a day from before the reset, because reconciliation would find no stored stat
+ * and read the whole day as new.
+ */
+export function isScored(date: string, startedOn: string): boolean {
+  return startedOn !== '' && date >= startedOn;
+}
+
+/** Wipe every earned figure, and begin counting from `today`. */
+export function resetProgress(today: string): UserProgress {
+  return { ...emptyProgress(), startedOn: today };
+}
+
 export function pruneStats(
   stats: Record<string, DailyStat>,
   today: string,
@@ -619,7 +641,7 @@ function shiftDateKey(dateKey: string, days: number): string {
 // ---------------------------------------------------------------------------
 
 export function emptyProgress(): UserProgress {
-  return { totalXp: 0, brass: 0, brassSpent: 0, backfilledOn: '', disciplines: {} };
+  return { totalXp: 0, brass: 0, brassSpent: 0, startedOn: '', disciplines: {} };
 }
 
 /**

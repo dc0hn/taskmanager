@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Lock } from 'lucide-react';
 import type {
@@ -62,6 +62,7 @@ interface Props {
   badges: BadgeStatus[];
   shop: ShopState;
   shopOffers: Offer[];
+  onResetProgress: () => void;
   onBuy: (itemId: string) => void;
   onEquipItem: (itemId: string) => void;
   onUnequipSlot: (slot: 'finish' | 'meter' | 'title' | 'frame') => void;
@@ -101,6 +102,7 @@ export default function StandingView({
   badges,
   shop,
   shopOffers,
+  onResetProgress,
   onBuy,
   onEquipItem,
   onUnequipSlot,
@@ -464,6 +466,10 @@ export default function StandingView({
             </div>
           </div>
         </Foldable>
+
+        <div className="rule-h" />
+
+        <ResetRow onReset={onResetProgress} />
       </motion.div>
     </div>
   );
@@ -548,5 +554,56 @@ function AreaRow({
         <div className="font-mono text-nano text-bone-4 mt-1">{hint.toLowerCase()}</div>
       )}
     </motion.div>
+  );
+}
+
+/**
+ * Starting over.
+ *
+ * Two clicks, and the second one is labelled with what it destroys. Kept at the very
+ * bottom because it is the one control here you cannot undo — and stated plainly that
+ * it leaves the calendar itself alone, since the fear that stops people using a reset
+ * is not knowing whether their work goes with it.
+ */
+function ResetRow({ onReset }: { onReset: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <section className="py-5">
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <div className="flex-1 min-w-[280px]">
+          <div className="legend mb-1">Start again</div>
+          <p className="text-body-sm text-bone-3 leading-relaxed max-w-[62ch]">
+            Clears XP, brass, badges, the run, quests, the codex and everything bought,
+            and counts from today. Your calendar, goals, routines and day marks are
+            untouched.
+          </p>
+        </div>
+        {confirming ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setConfirming(false)}
+              className="btn-quiet text-body-sm px-3 h-8"
+            >
+              Keep it
+            </button>
+            <button
+              onClick={() => {
+                setConfirming(false);
+                onReset();
+              }}
+              className="text-body-sm px-3 h-8 font-semibold"
+              style={{ background: 'var(--bad)', color: 'var(--action-ink)' }}
+            >
+              Erase my standing
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => setConfirming(true)} className="btn-quiet text-body-sm px-3 h-8">
+            Reset standing
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
