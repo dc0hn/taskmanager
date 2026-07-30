@@ -7,6 +7,7 @@ import {
   type ProgressionState,
 } from './reducer';
 import { emptyProgress, xpToReachLevel, CYCLE_XP, NO_MODIFIERS } from '../progress';
+import type { DayModifiers } from '../progress';
 import { emptyAwards, emptyStreak } from '../streaks';
 import { emptyShop } from '../shop';
 import { DEFAULT_CATEGORIES } from '../types';
@@ -48,7 +49,7 @@ const block = (over: Partial<Block> = {}): Block => ({
 
 const reconcile = (
   days: { date: string; blocks: Block[] }[],
-  mods: Record<string, { boost: number }> = {}
+  mods: Record<string, DayModifiers> = {}
 ): ProgressionEvent => ({
   type: 'DaysReconciled',
   days,
@@ -126,14 +127,14 @@ describe('reconciling days', () => {
   it('applies a day modifier and reports the same total twice', () => {
     const days = [{ date: TODAY, blocks: [block()] }];
     const plain = progressionReducer(state(), reconcile(days));
-    const boosted = progressionReducer(state(), reconcile(days, { [TODAY]: { boost: 2 } }));
+    const boosted = progressionReducer(state(), reconcile(days, { [TODAY]: { boost: 2, character: null } }));
     expect(boosted.state.progress.totalXp).toBeGreaterThan(plain.state.progress.totalXp);
 
     // And boosting is idempotent too — the modifier is part of the recomputation, not an
     // increment applied on top of it.
     const again = progressionReducer(
       boosted.state,
-      reconcile(days, { [TODAY]: { boost: 2 } })
+      reconcile(days, { [TODAY]: { boost: 2, character: null } })
     );
     expect(again.changed).toBe(false);
   });

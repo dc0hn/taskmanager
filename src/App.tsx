@@ -23,6 +23,7 @@ import {
   type ProgressionStore,
 } from './progression/reducer';
 import { chainPayout, chainStatuses } from './chains';
+import { characterOf, sealCharacter } from './characters';
 import {
   currentSeason,
   resolveElapsedSeasons,
@@ -155,6 +156,7 @@ import {
   weekdayMedians,
   type DayModifiers,
   isScored,
+  NO_MODIFIERS,
   standingFor,
 } from './progress';
 import {
@@ -341,6 +343,14 @@ export default function App() {
   const [commissions, setCommissions] = useState<Commission[]>(loadCommissions);
   const [seasons, setSeasons] = useState<Record<string, SeasonRecord>>(loadAllSeasons);
   const [yearPageOpen, setYearPageOpen] = useState(false);
+  /**
+   * Bumped whenever a week record is written.
+   *
+   * The modifiers memo reads sealed characters out of storage, and storage is not reactive.
+   * Without this, sealing a character on Monday would not reach the scoring path until some
+   * unrelated render happened to rebuild the memo.
+   */
+  const [weekEpoch, setWeekEpoch] = useState(0);
 
   /**
    * The only latest-value mirror left.
@@ -557,6 +567,22 @@ export default function App() {
   const rules = useMemo(() => rulesFor(categories), [categories]);
 
   const weekKey = useMemo(() => toWeekKey(date), [date]);
+
+  /**
+   * The character of the week you are actually in, for the rail and the Standing card.
+   *
+   * Read off the CURRENT week rather than the displayed one: scrolling back to March should
+   * not change what the rail says this week is like. Days are scored against their own
+   * week's character in `modifiers`; this is only the label.
+   */
+  const thisWeeksCharacter = useMemo(
+    () => characterOf(loadWeek(currentWeekKey())),
+    // `weekEpoch` is the whole point here: this reads sealed week records out of storage,
+    // which is not reactive, so without it a character sealed on Monday would never reach
+    // the value. eslint cannot see through `loadWeek`, so it calls the dep unnecessary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [weekEpoch, todayKey]
+  );
 
   /**
    * The trailing baseline behind each weekday in the week strip.
@@ -800,6 +826,16 @@ export default function App() {
     const issued = issueRecurringGoals(current, loadAllWeeks());
     if (issued) saveWeek(issued);
 
+    // 2b) Seal this week's character, once. Written here rather than derived at scoring
+    //     time because the draw is an index into a content array: extend that array and an
+    //     unsealed week resolves differently, re-scoring every day in it. Sealing is what
+    //     makes the pool safe to grow.
+    const sealed = sealCharacter(loadWeek(current));
+    if (sealed) {
+      saveWeek(sealed);
+      setWeekEpoch((n) => n + 1);
+    }
+
     // 3) Seal every elapsed month and empty the carryover pile into it. The pile
     //    is month-scoped now: on the 1st it resets, and what was still waiting is
     //    written into that month's record as "carried and let go" rather than
@@ -847,6 +883,33 @@ export default function App() {
       (d) => stored.has(d) || (plans[d]?.blocks.length ?? 0) > 0
     );
   }, [loadedDates, plans]);
+
+  /**
+   * Per-day scoring modifiers, built once and shared by every path that scores a day.
+   *
+   * A booster is per DAY and a character is per WEEK, so this resolves each date's week and
+   * reads the sealed id off its record. Week records are loaded rather than taken from
+   * `week`, which only ever holds the one on screen — the reconcile window spans up to nine
+   * weeks, and a day scored against the wrong week's character would be worse than one
+   * scored against none.
+   */
+  const modifiers = useMemo<Record<string, DayModifiers>>(() => {
+    const byWeek = new Map<string, WeekRecord>();
+    for (const w of loadAllWeeks()) byWeek.set(w.week, w);
+    return Object.fromEntries(
+      authoritativeDates.map((d) => [
+        d,
+        {
+          boost: boostFor(shop, d),
+          character: characterOf(byWeek.get(toWeekKey(d))),
+        },
+      ])
+    );
+    // `weekEpoch` is the whole point here: this reads sealed week records out of storage,
+    // which is not reactive, so without it a character sealed on Monday would never reach
+    // the value. eslint cannot see through `loadWeek`, so it calls the dep unnecessary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authoritativeDates, shop, weekEpoch]);
 
   useEffect(() => {
     // A sealed week is settled history. Its outcome has already been folded into
@@ -945,9 +1008,7 @@ export default function App() {
       type: 'DaysReconciled',
       days,
       categories,
-      modifiers: Object.fromEntries(
-        days.map((d) => [d.date, { boost: boostFor(shop, d.date) }])
-      ),
+      modifiers,
       today: todayKey,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1251,13 +1312,7 @@ export default function App() {
    * some of them know about is worse than no booster: the meter, the area breakdown and
    * the toast would each report a different number for the same work.
    */
-  const modifiers = useMemo<Record<string, DayModifiers>>(
-    () =>
-      Object.fromEntries(
-        authoritativeDates.map((d) => [d, { boost: boostFor(shop, d) }])
-      ),
-    [authoritativeDates, shop]
-  );
+
 
   /** Area XP across everything currently loaded. */
   const areas = useMemo(() => {
@@ -1282,8 +1337,8 @@ export default function App() {
   }, [authoritativeDates, plans, categories, modifiers, streak.consistencyXp, progress.disciplines]);
 
   const todayReckoning = useMemo(
-    () => reckonDay(todayKey, plans[todayKey]?.blocks ?? [], categories, { boost: boostFor(shop, todayKey) }),
-    [plans, todayKey, categories, shop]
+    () => reckonDay(todayKey, plans[todayKey]?.blocks ?? [], categories, modifiers[todayKey] ?? NO_MODIFIERS),
+    [modifiers, plans, todayKey, categories]
   );
 
   /** The trailing fortnight, oldest first, for the spark columns. */
@@ -1956,7 +2011,7 @@ export default function App() {
         b.id === id ? { ...b, completed: true, completedAt: minutesSinceMidnightOf(day) } : b
       );
       const run = comboRuns(dayBlocks).get(id) ?? 0;
-      const boost = boostFor(shop, day);
+      const mods = modifiers[day] ?? NO_MODIFIERS;
       const { xp } = xpForBlock(
         { ...block, completed: true, completedAt: minutesSinceMidnightOf(day) },
         categories,
@@ -1965,18 +2020,18 @@ export default function App() {
       // The boost is a day-level multiplier, so the float has to apply it itself. Left
       // out, a boosted day showed +121 on the tick and credited +242 a beat later —
       // and the number you watch fly up is the one you believe.
-      setXpFloat({ key: Date.now(), xp: Math.round(xp * boost), combo: run });
+      setXpFloat({ key: Date.now(), xp: Math.round(xp * mods.boost), combo: run });
       if (run > 0) sfxCombo(run);
       else sfxComplete();
 
       // `cleared` is minutes against minutes, so the boost cannot change it. Passed
       // anyway: these two want to be the same call as everywhere else, and the next
       // person to read a field off them should not have to know which ones are safe.
-      const after = reckonDay(day, dayBlocks, categories, { boost });
-      const before = reckonDay(day, plansRef.current[day]?.blocks ?? [], categories, { boost });
+      const after = reckonDay(day, dayBlocks, categories, mods);
+      const before = reckonDay(day, plansRef.current[day]?.blocks ?? [], categories, mods);
       if (after.stat.cleared && !before.stat.cleared) sfxDayCleared();
     },
-    [shop, mutateDay, categories]
+    [modifiers, mutateDay, categories]
   );
 
   const handleDeleteBlock = useCallback(
@@ -2486,6 +2541,7 @@ export default function App() {
         }}
         brass={progress.brass}
         run={displayRun(streak, dayStats[todayKey], dayMarks[todayKey] != null)}
+        character={thisWeeksCharacter}
         freezes={streak.freezes}
         sfxOn={sfxOn}
         onToggleSfx={() => setSfxOn((v) => !v)}
@@ -2672,6 +2728,7 @@ export default function App() {
               quests={quests}
               chains={chains}
               season={liveSeason}
+              character={thisWeeksCharacter}
               sealedSeasons={Object.keys(seasons).sort().map((k) => seasons[k])}
               seasonFraction={seasonProgress(todayKey)}
               commissions={commissions}

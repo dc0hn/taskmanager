@@ -834,7 +834,7 @@ describe('areaTotals', () => {
       },
     ];
     const plain = areaTotals(days, CATS);
-    const boosted = areaTotals(days, CATS, { '2026-07-30': { boost: 2 } });
+    const boosted = areaTotals(days, CATS, { '2026-07-30': { boost: 2, character: null } });
 
     expect(boosted.byCategory.deep).toBe(plain.byCategory.deep * 2);
     expect(boosted.byDiscipline.focus).toBe((plain.byDiscipline.focus ?? 0) * 2);
@@ -853,7 +853,7 @@ describe('areaTotals', () => {
       },
     ];
     const one = areaTotals([days[0]], CATS);
-    const mixed = areaTotals(days, CATS, { '2026-07-30': { boost: 2 } });
+    const mixed = areaTotals(days, CATS, { '2026-07-30': { boost: 2, character: null } });
     // One plain day plus one doubled day.
     expect(mixed.byCategory.deep).toBe(one.byCategory.deep * 3);
   });

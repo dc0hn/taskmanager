@@ -33,6 +33,7 @@ import { emptyAwards, emptyStreak } from './streaks';
 import { emptyShop, itemById, pruneBoostedDates, type ShopState } from './shop';
 import type { Commission } from './commissions';
 import { isSeasonKey, seasonRange, type SeasonRecord } from './seasons';
+import { characterById } from './characters';
 import { toDateKey } from './utils/time';
 
 // ============================================================================
@@ -418,6 +419,10 @@ export function loadWeek(weekKey: string): WeekRecord {
       ? (parsed.credits.map(normalizeCredit).filter(Boolean) as GoalCredit[])
       : [],
     resolved: parsed.resolved === true,
+    // An unknown id resolves to nothing rather than to a default. A record naming a
+    // character this build has never heard of must score as unmodified, not as whichever
+    // one happens to sit at index zero.
+    character: characterById(str(parsed.character)) ? str(parsed.character) : undefined,
   };
 }
 

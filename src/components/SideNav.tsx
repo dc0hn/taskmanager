@@ -56,6 +56,8 @@ interface Props {
   brass: number;
   /** Current day-streak, counting today if today already qualifies. */
   run: number;
+  /** This week's character, when one is sealed. Weather, not an achievement. */
+  character?: { name: string; blurb: string } | null;
   freezes: number;
   sfxOn: boolean;
   onToggleSfx: () => void;
@@ -87,6 +89,7 @@ function SideNav({
   standing,
   brass,
   run,
+  character = null,
   freezes,
   sfxOn,
   onToggleSfx,
@@ -196,6 +199,24 @@ function SideNav({
               </span>
             )}
           </div>
+
+          {/*
+            The week's character, stated once and quietly.
+
+            An almanac forecasts, so this reads as weather rather than as an achievement —
+            no takeover on a Monday, no colour, no motion. The blurb is the title attribute
+            because the name is the part you check at a glance and the rule is the part you
+            look up.
+          */}
+          {character && (
+            <div
+              className="font-mono truncate"
+              style={{ fontSize: 9.5, letterSpacing: '0.06em', color: 'var(--bone-4)' }}
+              title={character.blurb}
+            >
+              THIS WEEK — {character.name.toUpperCase()}
+            </div>
+          )}
         </button>
       </div>
 

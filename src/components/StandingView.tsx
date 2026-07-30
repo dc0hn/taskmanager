@@ -85,6 +85,8 @@ interface Props {
   chains: ChainStatus[];
   /** The season in progress, reckoned live. */
   season: SeasonRecord;
+  /** This week's sealed character, or null on weeks that predate them. */
+  character: { name: string; blurb: string } | null;
   sealedSeasons: SeasonRecord[];
   /** How far through the season today is, 0..1. */
   seasonFraction: number;
@@ -132,6 +134,7 @@ export default function StandingView({
   quests,
   chains,
   season,
+  character,
   sealedSeasons,
   seasonFraction,
   commissions,
@@ -385,6 +388,34 @@ export default function StandingView({
         </Foldable>
 
         <div className="rule-h" />
+
+        {/*
+          The week's character.
+
+          A card rather than a fold: it is one line of fact about the seven days you are
+          in, and burying it behind a disclosure would make it look like a setting. No
+          motion beyond the panel's own entrance — an almanac forecasts, and weather does
+          not announce itself.
+        */}
+        {character && (
+          <>
+            <div className="rule-h" />
+            <div className="py-3">
+              <div className="legend mb-1">This week</div>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <span
+                  className="font-display"
+                  style={{ fontSize: 21, color: 'var(--bone-0)', lineHeight: 1.15 }}
+                >
+                  {character.name}
+                </span>
+                <span className="text-body-sm text-bone-3 max-w-[52ch] leading-relaxed">
+                  {character.blurb}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
 
         {/*
           The season, and the year it belongs to.

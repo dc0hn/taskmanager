@@ -4,6 +4,7 @@ import { DEFAULT_CATEGORIES } from './types';
 import type { Block, DailyStat, DayPlan } from './types';
 import { buildInsightContext, insightStatuses } from './insights';
 import { emptyAwards } from './streaks';
+import { characterById } from './characters';
 import { invalidatePlanDates, listPlanDates, loadPlans, savePlan } from './storage';
 
 // Throwaway measurement harness for the technical audit. Not a behavioural test —
@@ -54,11 +55,21 @@ describe('audit: hot-path cost', () => {
     }
     const warmMs = (performance.now() - t1) / 20;
 
+    // And again with a character applied to every day, since that adds a per-block call
+    // inside the hottest loop in the app.
+    const mods = Object.fromEntries(
+      days.map((d) => [d.date, { boost: 1, character: characterById('the-long-haul') }])
+    );
+    const t2 = performance.now();
+    reconcileDays(emptyProgress(), {}, days, DEFAULT_CATEGORIES, mods);
+    const characterMs = performance.now() - t2;
+
     console.log(
-      `reconcile 60d/480 blocks — cold ${coldMs.toFixed(2)}ms, warm ${warmMs.toFixed(3)}ms`
+      `reconcile 60d/480 blocks — cold ${coldMs.toFixed(2)}ms, warm ${warmMs.toFixed(3)}ms, with character ${characterMs.toFixed(2)}ms`
     );
     expect(coldMs).toBeLessThan(16);
     expect(warmMs).toBeLessThan(16);
+    expect(characterMs).toBeLessThan(16);
   });
 
   it('computes the 90-day codex inside a frame', () => {

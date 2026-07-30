@@ -248,6 +248,14 @@ export interface WeekRecord {
   credits: GoalCredit[];
   /** Set once rollover has resolved this week, making rollover idempotent. */
   resolved?: boolean;
+  /**
+   * The week's character, sealed on first issue. Absent on weeks predating this.
+   *
+   * Sealed rather than derived because the draw is an index into a content array: extend
+   * that array and an unsealed past week resolves to a different character, re-scoring
+   * every day in it. Absent means no character, never a default one.
+   */
+  character?: string;
 }
 
 export interface CarryoverItem {

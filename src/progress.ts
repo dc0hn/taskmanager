@@ -334,14 +334,18 @@ export function comboRuns(blocks: Block[]): Map<string, number> {
   return out;
 }
 
-export function comboMultiplier(run: number): number {
-  return 1 + COMBO_STEP * Math.min(Math.max(0, run), COMBO_MAX_RUN);
+export function comboMultiplier(run: number, maxRun = COMBO_MAX_RUN): number {
+  // `maxRun` is overridable so a week's character can carry runs further. Never below the
+  // house cap, because a character must not reduce a figure.
+  return 1 + COMBO_STEP * Math.min(Math.max(0, run), Math.max(COMBO_MAX_RUN, maxRun));
 }
 
 export function xpForBlock(
   block: Block,
   categories: CategoryDef[],
-  comboRun = 0
+  comboRun = 0,
+  /** The week's character, when one is sealed. Applied last, after the combo term. */
+  character: DayModifiers['character'] = null
 ): { xp: number; notes: string[] } {
   const minutes = Math.max(0, block.end - block.start);
   const kind = kindOf(block.category, categories);
@@ -361,10 +365,18 @@ export function xpForBlock(
     xp *= ON_TIME_WEIGHT;
     notes.push(`on time ×${ON_TIME_WEIGHT}`);
   }
-  const cm = comboMultiplier(comboRun);
+  const cm = comboMultiplier(comboRun, character?.comboMax);
   if (cm > 1) {
     xp *= cm;
     notes.push(`combo ×${cm.toFixed(1)}`);
+  }
+
+  // Last, so a character multiplies the finished figure rather than one term of it. Clamped
+  // at 1 because no character may ever reduce a score — see the note in characters.ts.
+  const cw = Math.max(1, character?.weigh?.(block, kind, minutes) ?? 1);
+  if (cw > 1) {
+    xp *= cw;
+    notes.push(`the week ×${cw}`);
   }
 
   return { xp: Math.max(MIN_BLOCK_XP, Math.round(xp)), notes };
@@ -398,9 +410,21 @@ export interface DayReckoning {
 export interface DayModifiers {
   /** Purchased booster for this specific day. 1 when none. */
   boost: number;
+  /**
+   * The sealed character of the week this day belongs to.
+   *
+   * Typed as a shape rather than imported from characters.ts, which would make this module
+   * depend on content. Scoring needs to know what a character DOES, not which ones exist.
+   */
+  character: {
+    weigh?: (b: Block, kind: CategoryKind, minutes: number) => number;
+    dayBonus?: (r: { byCategory: Record<string, number>; completedCount: number }) => number;
+    brassRate?: number;
+    comboMax?: number;
+  } | null;
 }
 
-export const NO_MODIFIERS: DayModifiers = { boost: 1 };
+export const NO_MODIFIERS: DayModifiers = { boost: 1, character: null };
 
 export function reckonDay(
   date: string,
@@ -440,7 +464,7 @@ export function reckonDay(
     const run = runs.get(b.id) ?? 0;
     bestCombo = Math.max(bestCombo, run + 1);
 
-    const { xp, notes } = xpForBlock(b, categories, run);
+    const { xp, notes } = xpForBlock(b, categories, run, mods.character);
     xpEarned += xp;
     lines.push({ id: b.id, label: b.title, xp, minutes, notes });
 
@@ -465,6 +489,20 @@ export function reckonDay(
       xp: bonus,
       minutes: 0,
       notes: ['every planned minute done'],
+    });
+  }
+
+  // 3) The week's character, as its own line. After the cleared bonus and before the boost,
+  //    so the ledger reads in the order the multipliers were applied.
+  const dayBonus = mods.character?.dayBonus?.({ byCategory, completedCount }) ?? 0;
+  if (dayBonus > 0) {
+    xpEarned += dayBonus;
+    lines.push({
+      id: `${date}:character`,
+      label: "The week's character",
+      xp: dayBonus,
+      minutes: 0,
+      notes: [],
     });
   }
 
@@ -494,7 +532,9 @@ export function reckonDay(
     }
   }
 
-  const brassEarned = xpEarned > 0 ? Math.max(1, Math.round(xpEarned * BRASS_PER_XP)) : 0;
+  // 5) Brass, at the week's rate when its character sets one.
+  const brassRate = mods.character?.brassRate ?? BRASS_PER_XP;
+  const brassEarned = xpEarned > 0 ? Math.max(1, Math.round(xpEarned * brassRate)) : 0;
 
   return {
     stat: {
