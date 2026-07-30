@@ -12,8 +12,22 @@ import {
   unlockKey,
   unlockedCount,
   unlocksDue,
+  insightIdFromKey,
   type InsightContext,
 } from './insights';
+import { payoutXp } from './types';
+import type { AwardPayout } from './types';
+
+/** Test shim: `unlocksDue` returns payouts now, not parallel id/key/xp arrays. */
+function unlocks(ledger: Parameters<typeof unlocksDue>[0], ctx: Parameters<typeof unlocksDue>[1]) {
+  const payouts: AwardPayout[] = unlocksDue(ledger, ctx);
+  return {
+    payouts,
+    keys: payouts.map((a) => a.key),
+    ids: payouts.map((a) => insightIdFromKey(a.key)),
+    xp: payoutXp(payouts),
+  };
+}
 import { DEFAULT_CATEGORIES } from './types';
 import type { AwardLedger, Block, DailyStat, DayPlan } from './types';
 
@@ -421,12 +435,12 @@ describe('what an early start is worth', () => {
 
 describe('unlocking', () => {
   it('unlocks nothing without the data', () => {
-    expect(unlocksDue(NONE, EMPTY).keys).toEqual([]);
+    expect(unlocks(NONE, EMPTY).keys).toEqual([]);
   });
 
   it('unlocks a card whose requirement is met', () => {
     const ctx = history(12, 3, () => 480);
-    const due = unlocksDue(NONE, ctx);
+    const due = unlocks(NONE, ctx);
     expect(due.ids).toContain('peak-window');
     expect(due.xp).toBeGreaterThan(0);
   });
@@ -435,14 +449,14 @@ describe('unlocking', () => {
     // The requirement can be met on paper while the data still supports no finding,
     // and an empty card is worse than a sealed one.
     const uniform = history(12, 4, () => 600);
-    const due = unlocksDue(NONE, uniform);
+    const due = unlocks(NONE, uniform);
     expect(due.ids).not.toContain('session-length');
   });
 
   it('never unlocks the same card twice', () => {
     const ctx = history(12, 3, () => 480);
     const held: AwardLedger = { granted: [unlockKey('peak-window')] };
-    expect(unlocksDue(held, ctx).ids).not.toContain('peak-window');
+    expect(unlocks(held, ctx).ids).not.toContain('peak-window');
   });
 
   it('reports what is unlocked', () => {

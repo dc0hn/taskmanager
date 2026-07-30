@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { Snowflake } from 'lucide-react';
 import type { DailyStat, DayMarkDef, DayMarks, DayOutcome, StreakState } from '../types';
 import {
@@ -12,7 +12,7 @@ import {
 } from '../streaks';
 import { markById } from '../daymarks';
 import { weekdayLabel } from '../week';
-import { staggerDelay } from '../utils/motion';
+import { DUR, EASE_OUT, staggerDelay } from '../utils/motion';
 
 // ============================================================================
 // StreakPanel
@@ -78,6 +78,7 @@ function StreakPanel({
   const strip = outcomeStrip(dates, stats, marks, today, streak.frozenDates);
   const needed = minutesToThreshold(todayStat);
   const untilFreeze = daysUntilFreeze(streak, today);
+  const reduced = useReducedMotion() ?? false;
   // Scale the strip against its own busiest day, so it stays readable whether a
   // typical day earns 90 XP or 400.
   const peakXp = Math.max(1, ...dates.map((d) => stats[d]?.xpEarned ?? 0));
@@ -103,18 +104,43 @@ function StreakPanel({
             </span>
           </div>
 
-          {/* The safety net, stated plainly. Hiding it is how people lose runs. */}
+          {/*
+            The safety net, stated plainly. Hiding it is how people lose runs.
+
+            The pips animate their own depletion, and that is the point rather than
+            decoration: "four of six outcomes keep your run" is the emotional core of this
+            app, and a toast saying a freeze was spent teaches it far less well than
+            watching one go out. It is the one animation here that changes what someone
+            understands about the mechanic instead of just how it feels.
+
+            `initial={false}` so a panel opening on an already-spent freeze shows it spent,
+            rather than replaying the loss every time you visit.
+          */}
           <div className="flex items-center gap-1.5 mt-2">
-            {Array.from({ length: streak.capacity }, (_, i) => (
-              <Snowflake
-                key={i}
-                size={13}
-                strokeWidth={2}
-                style={{
-                  color: i < streak.freezes ? 'var(--signal)' : 'var(--bone-5)',
-                }}
-              />
-            ))}
+            {Array.from({ length: streak.capacity }, (_, i) => {
+              const held = i < streak.freezes;
+              return (
+                <motion.span
+                  key={i}
+                  className="inline-flex"
+                  initial={false}
+                  animate={{
+                    color: held ? 'var(--signal)' : 'var(--bone-5)',
+                    // A held freeze sits at full size; a spent one shrinks a touch and
+                    // dims, so the change reads even in monochrome.
+                    scale: held ? 1 : 0.82,
+                    opacity: held ? 1 : 0.7,
+                  }}
+                  transition={
+                    reduced
+                      ? { duration: 0 }
+                      : { duration: DUR.base, ease: EASE_OUT }
+                  }
+                >
+                  <Snowflake size={13} strokeWidth={2} />
+                </motion.span>
+              );
+            })}
             <span className="font-mono text-nano tnum text-bone-3 ml-1">
               {streak.freezes > 0
                 ? `${streak.freezes} freeze${streak.freezes === 1 ? '' : 's'} in hand`

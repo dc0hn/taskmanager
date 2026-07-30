@@ -1,5 +1,6 @@
 import type {
   AwardLedger,
+  AwardPayout,
   Block,
   CategoryDef,
   DailyStat,
@@ -320,6 +321,35 @@ interface WildcardSpec {
 }
 
 /**
+ * ------------------------------------------------------------------------------------
+ * THE THREE POOLS BELOW ARE EFFECTIVELY FROZEN. Read this before editing them.
+ *
+ * Selection is `seedFrom(key) % items.length`, so the LENGTH of a pool is part of the
+ * answer for every seed. Appending is not the safe operation it looks like: add one
+ * entry and every date and week re-draws, including ones already behind you.
+ *
+ * What that costs, concretely. Payout keys embed the drawn spec's id — `daily:DATE:id`,
+ * `weekly:WEEK:id`. Change a pool mid-week and today's challenge becomes a different
+ * challenge with a different key: whatever progress was showing resets, and the new key
+ * is unpaid, so the same day can pay twice. Past weeks are protected only because
+ * payouts are gated on the current week; nothing protects the week in progress.
+ *
+ * So:
+ *   - Editing the name, blurb or `done` of an existing entry is safe. Its id and the
+ *     pool length are unchanged, so every draw stays the same.
+ *   - Adding or removing an entry re-rolls history. If it has to happen, ship it with a
+ *     migration or accept that the current week's board is scrambled once.
+ *   - Reordering is pointless and confusing: the seed is not positional in any way a
+ *     reader can predict, so it changes draws without changing anything meaningful.
+ *
+ * The alternative — hashing each entry's id and picking the lowest — would make pools
+ * genuinely append-safe. It is the right fix if these ever need to grow often. It is not
+ * done here because it would re-roll every draw once, which is the very cost being
+ * avoided, and the pools have been stable.
+ * ------------------------------------------------------------------------------------
+ */
+
+/**
  * The pool. One is drawn per week, stably from the week key.
  *
  * Written as counters rather than pass/fail so a wildcard can show progress, and so
@@ -459,7 +489,7 @@ interface ChallengeSpec {
   done: (ctx: WeekContext, date: string) => number;
 }
 
-/** One drawn per day, stably from the date. */
+/** One drawn per day, stably from the date. Frozen — see the note above WILDCARDS. */
 export const DAILY_CHALLENGES: ChallengeSpec[] = [
   {
     id: 'first-by-noon',
@@ -522,6 +552,7 @@ export const DAILY_CHALLENGES: ChallengeSpec[] = [
   },
 ];
 
+/** One drawn per week. Frozen — see the note above WILDCARDS. */
 export const WEEKLY_CHALLENGES: ChallengeSpec[] = [
   {
     id: 'five-kept',
@@ -603,13 +634,6 @@ export function questKey(id: string): string {
   return QUEST_KEY_PREFIX + id;
 }
 
-export interface QuestPayout {
-  keys: string[];
-  xp: number;
-  /** Names, for the toast. */
-  names: string[];
-}
-
 /**
  * What is finished and not yet paid.
  *
@@ -621,27 +645,21 @@ export function questPayout(
   ledger: AwardLedger,
   quests: Quest[],
   challenges: Challenge[]
-): QuestPayout {
-  const keys: string[] = [];
-  const names: string[] = [];
-  let xp = 0;
+): AwardPayout[] {
+  const payouts: AwardPayout[] = [];
   for (const q of quests) {
     if (!q.complete) continue;
     const key = questKey(q.id);
     if (ledger.granted.includes(key)) continue;
-    keys.push(key);
-    names.push(q.name);
-    xp += q.bonusXp;
+    payouts.push({ key, xp: q.bonusXp, label: q.name });
   }
   for (const c of challenges) {
     if (!c.complete) continue;
     const key = questKey(c.id);
     if (ledger.granted.includes(key)) continue;
-    keys.push(key);
-    names.push(c.name);
-    xp += c.xp;
+    payouts.push({ key, xp: c.xp, label: c.name });
   }
-  return { keys, xp, names };
+  return payouts;
 }
 
 export function isPaid(ledger: AwardLedger, id: string): boolean {

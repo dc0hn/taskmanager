@@ -89,7 +89,8 @@ function tryRange(tok: string): { start: number; end: number } | null {
   const body = hadAt ? tok.slice(1) : tok;
   const parts = body.split(/[-–]/);
   if (parts.length !== 2) return null;
-  let [a, b] = parts;
+  const [rawA, b] = parts;
+  let a = rawA;
   if (!a || !b) return null;
   // Shared period: "2-4pm" -> "2pm-4pm"
   const bPeriod = b.match(/(am|pm)$/i);

@@ -15,6 +15,7 @@ import RoutinesView from './components/RoutinesView';
 import CategoriesView from './components/CategoriesView';
 import Toast from './components/Toast';
 import BackupModal from './components/BackupModal';
+import { snapshotIfDue } from './snapshot';
 import type {
   Block,
   CarryoverItem,
@@ -27,6 +28,7 @@ import type {
   RecurringTask,
   Settings,
   AwardLedger,
+  AwardPayout,
   BadgeDef,
   DisciplineId,
   StreakState,
@@ -36,6 +38,7 @@ import type {
   WeeklyGoal,
   WeekRecord,
 } from './types';
+import { payoutXp } from './types';
 import {
   listPlanDates,
   loadCarryover,
@@ -100,6 +103,7 @@ import {
 import {
   buildInsightContext,
   insightById,
+  insightIdFromKey,
   insightStatuses,
   isRead,
   readKey,
@@ -245,7 +249,12 @@ const AXIS_W = 62; // must match TimeGrid's gutter so the week strip lines up
 const SAVE_DEBOUNCE = 250;
 
 export default function App() {
-  const todayKey = toDateKey(new Date());
+  // State rather than a value recomputed each render, and the difference is the whole
+  // point: recomputing gives the right answer only when something else happens to cause
+  // a render. TimeGrid ticks its own clock every minute, so at midnight it moved to the
+  // new day while everything hung off this one stayed on the old — the panel and the
+  // grid disagreeing about what "today" was until an unrelated edit shook it loose.
+  const [todayKey, setTodayKey] = useState(() => toDateKey(new Date()));
 
   const [nav, setNav] = useState<NavKey>('calendar');
   const [view, setView] = useState<ViewMode>('day');
@@ -268,6 +277,123 @@ export default function App() {
   const [streak, setStreak] = useState<StreakState>(loadStreak);
   const [awards, setAwards] = useState<AwardLedger>(loadAwards);
   const [shop, setShop] = useState<ShopState>(loadShop);
+
+  // -------------------------------------------------------------------------
+  // Latest-value mirrors
+  //
+  // Six refs holding the most recent committed value of state that effects need but
+  // must not depend on. The reconcile pass writes to `progress`; if it also depended on
+  // it, every write would re-trigger it. The mirror is how an effect reads "wherever we
+  // are now" without that loop.
+  //
+  // Refreshed in an effect rather than assigned during render, which is what the
+  // `react-hooks/refs` rule is about and it is right to be. Writing a ref while
+  // rendering makes the render impure: under a re-render that React discards, the write
+  // survives anyway, so the ref can end up describing a render that never committed.
+  // This runs with no dependency array, so it fires after every commit, and it is
+  // declared before every effect that reads a mirror — effects run in declaration
+  // order, so by the time any consumer runs, all six are current.
+  //
+  // One exception is deliberate: `grantOnce` advances `awardsRef` itself, mid-flush.
+  // That is not a stale write but the opposite — several effects grant in one commit and
+  // each needs to see the one before it, which is a whole commit earlier than this
+  // effect can help with. See the note there; it is the bug that cost a duplicate badge
+  // payment.
+  // -------------------------------------------------------------------------
+  const plansRef = useRef(plans);
+  const progressRef = useRef(progress);
+  const statsRef = useRef(dayStats);
+  const streakRef = useRef(streak);
+  const awardsRef = useRef(awards);
+  const shopRef = useRef(shop);
+
+  useEffect(() => {
+    plansRef.current = plans;
+    progressRef.current = progress;
+    statsRef.current = dayStats;
+    streakRef.current = streak;
+    awardsRef.current = awards;
+    shopRef.current = shop;
+  });
+
+  /**
+   * Cross midnight without being touched.
+   *
+   * Every lazy rollover in here — the week record, the month record, the streak walk —
+   * is correct whenever it runs, but it only runs when something renders. Left to
+   * itself the app would sit on yesterday's date until the first click of the morning,
+   * so a run resolved at 09:00 rather than at 00:00 and the day view opened on the
+   * wrong day.
+   *
+   * The timer aims a couple of seconds PAST midnight, because a `setTimeout` that fires
+   * a few milliseconds early would read the date as yesterday and then not fire again
+   * for 24 hours. It reschedules from the real clock each time rather than adding 24
+   * hours, which is what keeps it right across a DST change — one local day is not
+   * always 1440 minutes long.
+   *
+   * The wake listener covers what the timer cannot: macOS suspends timers while the
+   * machine sleeps, so a laptop closed at midnight fires the timeout late. Recomputing
+   * on wake means late is harmless, since the date is always read from the clock rather
+   * than counted forward.
+   */
+  useEffect(() => {
+    let timer: number | undefined;
+
+    const sync = () => setTodayKey((prev) => {
+      const now = toDateKey(new Date());
+      return now === prev ? prev : now;
+    });
+
+    const schedule = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        2
+      );
+      timer = window.setTimeout(() => {
+        sync();
+        schedule();
+      }, Math.max(1000, nextMidnight.getTime() - now.getTime()));
+    };
+
+    schedule();
+    const onWake = () => {
+      sync();
+      if (timer != null) window.clearTimeout(timer);
+      schedule();
+    };
+    window.addEventListener('focus', onWake);
+    document.addEventListener('visibilitychange', onWake);
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+      window.removeEventListener('focus', onWake);
+      document.removeEventListener('visibilitychange', onWake);
+    };
+  }, []);
+
+  /**
+   * A daily copy of everything, in a file the app owns.
+   *
+   * Deliberately idle rather than immediate. A snapshot serialises the whole profile,
+   * and doing that during launch would compete with the first paint for no reason — the
+   * thing being protected against is losing the store, which a few seconds does not
+   * change. Keyed on `todayKey`, so a session left open for a week still takes one a day.
+   *
+   * Nothing here can fail loudly. `snapshotIfDue` returns its outcome rather than
+   * throwing, and a failure is recorded for the backup panel to show rather than
+   * surfaced as a toast — a backup that interrupts you to report itself is worse than
+   * one that quietly writes.
+   */
+  useEffect(() => {
+    const idle = window.setTimeout(() => {
+      void snapshotIfDue(todayKey);
+    }, 4000);
+    return () => window.clearTimeout(idle);
+  }, [todayKey]);
 
   const [overflow, setOverflow] = useState<Task[]>([]);
   const [overflowReasons, setOverflowReasons] = useState<Record<string, string>>({});
@@ -378,8 +504,6 @@ export default function App() {
   // Persistence — per-day dirty tracking, so a keystroke doesn't rewrite 42 days
   // -------------------------------------------------------------------------
   const dirty = useRef<Set<string>>(new Set());
-  const plansRef = useRef(plans);
-  plansRef.current = plans;
 
   const flush = useCallback(() => {
     for (const d of dirty.current) {
@@ -467,9 +591,15 @@ export default function App() {
   // -------------------------------------------------------------------------
   // Lazy week rollover
   //
-  // Runs on mount and whenever the calendar week changes. Nothing depends on the
+  // Runs on mount and again whenever the date changes under it. Nothing depends on the
   // app having been open at midnight on Sunday: elapsed weeks are resolved on
   // read, in order, and the `resolved` flag makes it idempotent.
+  //
+  // Keyed on `todayKey` rather than mounting once, which is what stops a session left
+  // open over a weekend from sealing Sunday's week on Tuesday morning. Safe to re-run
+  // precisely because every step here is already idempotent — the `resolved` flag for
+  // weeks, the (goalId, weekKey) pair for issued goals, the presence of a record for
+  // months. Re-running on a day that has already rolled over changes nothing.
   // -------------------------------------------------------------------------
   useEffect(() => {
     const current = currentWeekKey();
@@ -506,7 +636,7 @@ export default function App() {
 
     if (result.changed || issued) setWeek(loadWeek(weekKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [todayKey]);
 
   // Swap the loaded week record when the displayed week changes.
   useEffect(() => {
@@ -550,7 +680,7 @@ export default function App() {
     if (JSON.stringify(credits) !== JSON.stringify(week.credits)) {
       setWeek((prev) => ({ ...prev, credits }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [plans, authoritativeDates, week]);
 
   useEffect(() => {
@@ -596,10 +726,6 @@ export default function App() {
    * off the progress object, which it writes to — depending on what you set is how
    * you get a render loop.
    */
-  const progressRef = useRef(progress);
-  progressRef.current = progress;
-  const statsRef = useRef(dayStats);
-  statsRef.current = dayStats;
 
   const dayFingerprint = useMemo(
     () =>
@@ -689,10 +815,6 @@ export default function App() {
   // Today is deliberately never settled here — a morning with nothing done yet must
   // not break a run the afternoon was about to save.
   // -------------------------------------------------------------------------
-  const streakRef = useRef(streak);
-  streakRef.current = streak;
-  const awardsRef = useRef(awards);
-  awardsRef.current = awards;
 
   /**
    * Grant one-off awards and advance the ledger in the same step.
@@ -711,12 +833,20 @@ export default function App() {
    * Advancing the ref makes each grant visible to the next one in the same flush.
    * It also makes a re-run harmless, which is what StrictMode does on mount.
    */
-  const grantOnce = useCallback((keys: string[]): string[] => {
-    const { ledger, granted } = grantAwards(awardsRef.current, keys);
+  const grantOnce = useCallback((payouts: AwardPayout[]): AwardPayout[] => {
+    const { ledger, granted } = grantAwards(
+      awardsRef.current,
+      payouts.map((p) => p.key)
+    );
     if (granted.length === 0) return [];
     awardsRef.current = ledger;
     setAwards(ledger);
-    return granted;
+    // Returns the payouts that were actually granted, so the caller's XP is a sum of
+    // what happened rather than of what was offered. Returning keys let callers pay a
+    // total computed before the ledger had its say, and a list where one key was
+    // already held still paid for all of them.
+    const fresh = new Set(granted);
+    return payouts.filter((p) => fresh.has(p.key));
   }, []);
 
   useEffect(() => {
@@ -739,27 +869,31 @@ export default function App() {
 
     // One-off awards go through the ledger, so the same comeback can never be paid
     // twice however many times this effect runs.
-    if (result.awards.length > 0 || result.brass > 0) {
-      const granted = grantOnce(result.awards);
-      // Award XP only for keys that were genuinely new; kept-day brass is guarded by
-      // `resolvedThrough` instead, since it is paid per day rather than per award.
-      const xp = granted.length > 0 ? result.xp : 0;
+    let paid: AwardPayout[] = [];
+    if (result.payouts.length > 0 || result.brass > 0) {
+      // Pay for what the ledger actually accepted. A walk can raise a comeback and a
+      // milestone together, and this producer cannot know which were already held —
+      // so the sum has to come from `paid`, never from what was offered.
+      paid = grantOnce(result.payouts);
+      const xp = payoutXp(paid);
+      // Kept-day brass is guarded by `resolvedThrough` rather than by the ledger, since
+      // it is paid per day walked rather than per award.
       const brass = result.brass + Math.max(0, Math.round(xp * 0.1));
       if (xp > 0 || brass > 0) {
         setProgress((p) => ({ ...p, totalXp: p.totalXp + xp, brass: p.brass + brass }));
       }
-      const milestone = biggestStreakMilestone(granted);
+      const milestone = biggestStreakMilestone(paid.map((p) => p.key));
       if (deservesTakeover(milestone)) {
         setRunTakeover(milestone);
         sfxMilestone();
       } else if (milestone != null) {
-        setToast(`${milestone} days running. +${result.xp} XP.`);
+        setToast(`${milestone} days running. +${xp} XP.`);
       }
     }
 
     // Say something only when the safety net actually did something, or when a run
     // ended. Both are framed as what they are: the net worked, or today starts over.
-    if (result.awards.some((k) => k.startsWith('comeback:'))) {
+    if (paid.some((p) => p.key.startsWith('comeback:'))) {
       comebackTodayRef.current = true;
     }
 
@@ -790,17 +924,18 @@ export default function App() {
       current: r.streak.current,
     }));
     const due = routineAwardsDue(awardsRef.current, runs);
-    if (due.keys.length === 0) return;
-    const granted = grantOnce(due.keys);
-    if (granted.length === 0) return;
+    if (due.length === 0) return;
+    const paid = grantOnce(due);
+    if (paid.length === 0) return;
+    const xp = payoutXp(paid);
     setProgress((p) => ({
       ...p,
-      totalXp: p.totalXp + due.xp,
-      brass: p.brass + Math.max(1, Math.round(due.xp * 0.1)),
+      totalXp: p.totalXp + xp,
+      brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
     }));
-    const first = granted[0].split(':');
+    const first = paid[0].key.split(':');
     const label = habits.templates.find((t) => t.id === first[1])?.label ?? 'A routine';
-    setToast(`${label} — ${first[2]} days running. +${due.xp} XP.`);
+    setToast(`${label} — ${first[2]} days running. +${xp} XP.`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [habits, todayKey]);
 
@@ -811,16 +946,25 @@ export default function App() {
    * cannot pay twice — the same guarantee the badges and streak milestones rely on.
    */
   const payBonus = useCallback(
-    (award: { keys: string[]; xp: number; disciplines: Partial<Record<DisciplineId, number>>; labels: string[] }) => {
-      if (award.keys.length === 0) return;
-      if (grantOnce(award.keys).length === 0) return;
+    (due: AwardPayout[]) => {
+      if (due.length === 0) return;
+      const paid = grantOnce(due);
+      if (paid.length === 0) return;
+      // Both review bonuses are raised by the same act, so one being already held is an
+      // ordinary state. XP, disciplines and the toast are all built from `paid`.
+      const xp = payoutXp(paid);
+      const disciplines: Partial<Record<DisciplineId, number>> = {};
+      for (const award of paid) {
+        if (!award.discipline) continue;
+        disciplines[award.discipline] = (disciplines[award.discipline] ?? 0) + award.xp;
+      }
       setProgress((p) => ({
         ...p,
-        totalXp: p.totalXp + award.xp,
-        brass: p.brass + Math.max(1, Math.round(award.xp * 0.1)),
-        disciplines: mergeDisciplines(p.disciplines ?? {}, award.disciplines),
+        totalXp: p.totalXp + xp,
+        brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
+        disciplines: mergeDisciplines(p.disciplines ?? {}, disciplines),
       }));
-      setToast(`${award.labels.join(' · ')} · +${award.xp} XP`);
+      setToast(`${paid.map((p) => p.label ?? 'Bonus').join(' · ')} · +${xp} XP`);
     },
     [grantOnce]
   );
@@ -835,7 +979,7 @@ export default function App() {
   useEffect(() => {
     if (!progressRef.current.startedOn) return;
     payBonus(planAheadDue(awardsRef.current, plansRef.current, todayKey));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [dayFingerprint, todayKey, payBonus]);
 
   /**
@@ -862,20 +1006,20 @@ export default function App() {
       comebackToday: comebackTodayRef.current,
     });
     const due = evaluateBadges(awardsRef.current, context);
-    if (due.keys.length === 0) return;
+    if (due.length === 0) return;
 
-    const granted = grantOnce(due.keys);
-    if (granted.length === 0) return;
+    const paid = grantOnce(due);
+    if (paid.length === 0) return;
 
     // Built by loop rather than filtered: `badgeById` returns the rule, which carries
     // a `test` function, and a type predicate narrowing to the plain def would be
     // widening rather than narrowing.
     const defs: BadgeDef[] = [];
-    for (const key of granted) {
-      const def = badgeById(badgeIdFromKey(key));
+    for (const p of paid) {
+      const def = badgeById(badgeIdFromKey(p.key));
       if (def) defs.push(def);
     }
-    const xp = defs.reduce((sum, d) => sum + d.xp, 0);
+    const xp = payoutXp(paid);
     setProgress((p) => ({
       ...p,
       totalXp: p.totalXp + xp,
@@ -905,13 +1049,19 @@ export default function App() {
     if (was === null || was === kept || !kept) return;
     setRunKept({ run: streakRef.current.current + 1, seed: Date.now() });
     sfxDayCleared();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [dayStats, dayMarks, todayKey]);
 
   // -------------------------------------------------------------------------
   // Derived values
   // -------------------------------------------------------------------------
-  const dayPlan = plans[date] ?? { date, tasks: [], blocks: [] };
+  // Memoised on the two things it depends on. As a bare `??` it allocated a fresh empty
+  // plan on every render for any day with no record, so every memo downstream of it
+  // recomputed every time — including the ones over the whole loaded window.
+  const dayPlan = useMemo(
+    () => plans[date] ?? { date, tasks: [], blocks: [] },
+    [plans, date]
+  );
 
   const busyDates = useMemo(() => {
     const set = new Set<string>();
@@ -1027,14 +1177,27 @@ export default function App() {
     if (reviewSeen.current === seenKey) return;
     reviewSeen.current = seenKey;
     payBonus(reviewAwardsDue(awardsRef.current, goalsWeek, currentWeekKey(), review));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [nav, goalsWeek, review, payBonus]);
+
+  /**
+   * Per-day boost multipliers for everything currently loaded.
+   *
+   * Built once and shared by every path that scores a day, because a booster that only
+   * some of them know about is worse than no booster: the meter, the area breakdown and
+   * the toast would each report a different number for the same work.
+   */
+  const boosts = useMemo(
+    () => Object.fromEntries(authoritativeDates.map((d) => [d, boostFor(shop, d)])),
+    [authoritativeDates, shop]
+  );
 
   /** Area XP across everything currently loaded. */
   const areas = useMemo(() => {
     const t = areaTotals(
       authoritativeDates.map((d) => ({ date: d, blocks: plans[d]?.blocks ?? [] })),
-      categories
+      categories,
+      boosts
     );
     // Consistency is the one discipline not derived from blocks — it accumulates in
     // the streak record as days are kept, so it is merged in rather than computed.
@@ -1049,11 +1212,11 @@ export default function App() {
         ...(progress.disciplines ?? {}),
       },
     };
-  }, [authoritativeDates, plans, categories, streak.consistencyXp, progress.disciplines]);
+  }, [authoritativeDates, plans, categories, boosts, streak.consistencyXp, progress.disciplines]);
 
   const todayReckoning = useMemo(
-    () => reckonDay(todayKey, plans[todayKey]?.blocks ?? [], categories),
-    [plans, todayKey, categories]
+    () => reckonDay(todayKey, plans[todayKey]?.blocks ?? [], categories, boostFor(shop, todayKey)),
+    [plans, todayKey, categories, shop]
   );
 
   /** The trailing fortnight, oldest first, for the spark columns. */
@@ -1111,7 +1274,7 @@ export default function App() {
     // for history the rest of the system deliberately ignores.
     const wanted = dates.filter((d) => stored.has(d) && isScored(d, progress.startedOn));
     return buildInsightContext(loadPlans(wanted), wanted, dayStats, categories);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [nav, todayKey, dayStats, categories, progress.startedOn]);
 
   const codex = useMemo(
@@ -1132,19 +1295,21 @@ export default function App() {
     if (nav !== 'standing') return;
     if (!progressRef.current.startedOn) return;
     const due = unlocksDue(awardsRef.current, insightContext);
-    if (due.keys.length === 0) return;
+    if (due.length === 0) return;
 
-    if (grantOnce(due.keys).length === 0) return;
+    const paid = grantOnce(due);
+    if (paid.length === 0) return;
+    const xp = payoutXp(paid);
     setProgress((p) => ({
       ...p,
-      totalXp: p.totalXp + due.xp,
-      brass: p.brass + Math.max(1, Math.round(due.xp * 0.1)),
-      disciplines: mergeDisciplines(p.disciplines ?? {}, { insight: due.xp }),
+      totalXp: p.totalXp + xp,
+      brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
+      disciplines: mergeDisciplines(p.disciplines ?? {}, { insight: xp }),
     }));
     setCodexQueue((q) => [
       ...q,
-      ...due.ids.flatMap((id) => {
-        const rule = insightById(id);
+      ...paid.flatMap((p) => {
+        const rule = insightById(insightIdFromKey(p.key));
         return rule ? [{ name: rule.name, glyph: rule.glyph, xp: rule.xpUnlock }] : [];
       }),
     ]);
@@ -1158,8 +1323,6 @@ export default function App() {
     return () => clearTimeout(id);
   }, [codexQueue]);
 
-  const shopRef = useRef(shop);
-  shopRef.current = shop;
 
   const shopOffers = useMemo(
     () => offersFor(shop, progress, weekKey),
@@ -1225,7 +1388,7 @@ export default function App() {
     reviewSeen.current = '';
     comebackTodayRef.current = false;
     setToast('Standing reset. Level 0, nothing earned — counting from today.');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [todayKey]);
 
   const handleEquip = useCallback((itemId: string) => {
@@ -1250,7 +1413,7 @@ export default function App() {
     setShop(r.shop);
     setStreak((st) => ({ ...st, freezes: Math.min(st.capacity, st.freezes + 1) }));
     setToast('Freeze refilled.');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [shop.stock, streak.freezes, streak.capacity]);
 
   /**
@@ -1264,7 +1427,10 @@ export default function App() {
     if (isRead(awardsRef.current, id)) return;
     const rule = insightById(id);
     if (!rule) return;
-    if (grantOnce([readKey(id)]).length === 0) return;
+    const paid = grantOnce([
+      { key: readKey(id), xp: rule.xpRead, discipline: 'insight', label: rule.name },
+    ]);
+    if (paid.length === 0) return;
     setProgress((p) => ({
       ...p,
       totalXp: p.totalXp + rule.xpRead,
@@ -1286,25 +1452,25 @@ export default function App() {
     if (!progressRef.current.startedOn) return;
     if (weekKey !== currentWeekKey()) return;
     const due = questPayout(awardsRef.current, quests, [daily, weekly]);
-    if (due.keys.length === 0) return;
+    if (due.length === 0) return;
 
-    if (grantOnce(due.keys).length === 0) return;
+    const paid = grantOnce(due);
+    if (paid.length === 0) return;
+    const xp = payoutXp(paid);
     setProgress((p) => ({
       ...p,
-      totalXp: p.totalXp + due.xp,
-      brass: p.brass + Math.max(1, Math.round(due.xp * 0.1)),
+      totalXp: p.totalXp + xp,
+      brass: p.brass + Math.max(1, Math.round(xp * 0.1)),
     }));
 
     // One entry per finished thing, so a day that closes three plays three moments.
-    const names = new Set(due.names);
+    // Built from the payouts, which already carry the name and the XP that was paid —
+    // no second lookup by name, which was the one place a rename could mis-report.
     setQuestQueue((q) => [
       ...q,
-      ...[...names].map((name) => ({
-        name,
-        xp:
-          quests.find((x) => x.name === name)?.bonusXp ??
-          [daily, weekly].find((c) => c.name === name)?.xp ??
-          0,
+      ...paid.map((p) => ({
+        name: p.label ?? 'Quest',
+        xp: p.xp,
       })),
     ]);
     sfxMilestone();
@@ -1618,17 +1784,24 @@ export default function App() {
         b.id === id ? { ...b, completed: true, completedAt: minutesSinceMidnightOf(day) } : b
       );
       const run = comboRuns(dayBlocks).get(id) ?? 0;
+      const boost = boostFor(shopRef.current, day);
       const { xp } = xpForBlock(
         { ...block, completed: true, completedAt: minutesSinceMidnightOf(day) },
         categories,
         run
       );
-      setXpFloat({ key: Date.now(), xp, combo: run });
+      // The boost is a day-level multiplier, so the float has to apply it itself. Left
+      // out, a boosted day showed +121 on the tick and credited +242 a beat later —
+      // and the number you watch fly up is the one you believe.
+      setXpFloat({ key: Date.now(), xp: Math.round(xp * boost), combo: run });
       if (run > 0) sfxCombo(run);
       else sfxComplete();
 
-      const after = reckonDay(day, dayBlocks, categories);
-      const before = reckonDay(day, plansRef.current[day]?.blocks ?? [], categories);
+      // `cleared` is minutes against minutes, so the boost cannot change it. Passed
+      // anyway: these two want to be the same call as everywhere else, and the next
+      // person to read a field off them should not have to know which ones are safe.
+      const after = reckonDay(day, dayBlocks, categories, boost);
+      const before = reckonDay(day, plansRef.current[day]?.blocks ?? [], categories, boost);
       if (after.stat.cleared && !before.stat.cleared) sfxDayCleared();
     },
     [mutateDay, categories]

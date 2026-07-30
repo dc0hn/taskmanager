@@ -1,4 +1,4 @@
-import type { AwardLedger, Block, CategoryDef, DailyStat, DayPlan } from './types';
+import type { AwardLedger, AwardPayout, Block, CategoryDef, DailyStat, DayPlan } from './types';
 import { UNKNOWN_CATEGORY } from './types';
 import { scorable, wasOnTime } from './progress';
 import { weekdayOf } from './week';
@@ -560,19 +560,25 @@ export function insightStatuses(
 export function unlocksDue(
   ledger: AwardLedger,
   ctx: InsightContext
-): { keys: string[]; ids: string[]; xp: number } {
-  const keys: string[] = [];
-  const ids: string[] = [];
-  let xp = 0;
+): AwardPayout[] {
+  const payouts: AwardPayout[] = [];
   for (const rule of INSIGHTS) {
     if (isUnlocked(ledger, rule.id)) continue;
     if (rule.progress(ctx) < rule.target) continue;
     if (rule.compute(ctx) == null) continue;
-    keys.push(unlockKey(rule.id));
-    ids.push(rule.id);
-    xp += rule.xpUnlock;
+    payouts.push({
+      key: unlockKey(rule.id),
+      xp: rule.xpUnlock,
+      discipline: 'insight',
+      label: rule.name,
+    });
   }
-  return { keys, ids, xp };
+  return payouts;
+}
+
+/** The insight id behind an unlock key, for looking the rule back up. */
+export function insightIdFromKey(key: string): string {
+  return key.slice(UNLOCK_PREFIX.length);
 }
 
 export function unlockedCount(ledger: AwardLedger): number {

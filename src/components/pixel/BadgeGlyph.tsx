@@ -307,12 +307,6 @@ const FALLBACK = [
   '########',
 ];
 
-export function hasGlyph(badgeId: string): boolean {
-  return GLYPHS[badgeId] != null;
-}
-
-export const GLYPH_IDS = Object.keys(GLYPHS);
-
 interface Props {
   badgeId: string;
   size?: number;

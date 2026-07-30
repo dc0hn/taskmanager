@@ -25,6 +25,7 @@ import {
   xpToNextLevel,
 } from '../progress';
 import { colorsFor, resolveCategory } from '../utils/color';
+import Figure from './Figure';
 import { formatDuration } from '../utils/time';
 import { usePanelMotion, staggerDelay } from '../utils/motion';
 import Foldable from './Foldable';
@@ -186,12 +187,13 @@ export default function StandingView({
                 />
                 <div className="flex items-baseline justify-between mt-1.5 gap-4 flex-wrap">
                   <span className="font-mono text-nano tnum text-bone-3 tracking-wide">
-                    {s.intoLevel.toLocaleString()} / {s.levelCost.toLocaleString()} XP
+                    <Figure value={s.intoLevel} /> / {s.levelCost.toLocaleString()} XP
                     {' · '}
-                    {toNext.toLocaleString()} to {s.level === LEVELS_PER_CYCLE ? 'prestige' : RANKS[s.level]}
+                    <Figure value={toNext} /> to{' '}
+                    {s.level === LEVELS_PER_CYCLE ? 'prestige' : RANKS[s.level]}
                   </span>
                   <span className="font-mono text-nano tnum text-bone-2 tracking-wide">
-                    {progress.totalXp.toLocaleString()} XP lifetime
+                    <Figure value={progress.totalXp} /> XP lifetime
                   </span>
                 </div>
               </div>
@@ -499,11 +501,11 @@ function BrassPanel({ progress }: { progress: UserProgress }) {
           className="font-mono tnum"
           style={{ fontSize: 20, fontWeight: 700, color: 'var(--bone-0)' }}
         >
-          {progress.brass.toLocaleString()}
+          <Figure value={progress.brass} />
         </span>
       </div>
       <div className="font-mono text-nano tnum text-bone-3 mt-1">
-        {brassEarned(progress).toLocaleString()} earned
+        <Figure value={brassEarned(progress)} /> earned
       </div>
     </div>
   );

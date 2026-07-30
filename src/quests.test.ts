@@ -22,6 +22,23 @@ import {
   wildcardQuest,
   type WeekContext,
 } from './quests';
+import { payoutXp } from './types';
+import type { AwardPayout } from './types';
+
+/** Test shim: `questPayout` returns payouts now, not keys plus a summed xp plus names. */
+function payout(
+  ledger: Parameters<typeof questPayout>[0],
+  quests: Parameters<typeof questPayout>[1],
+  challenges: Parameters<typeof questPayout>[2]
+) {
+  const payouts: AwardPayout[] = questPayout(ledger, quests, challenges);
+  return {
+    payouts,
+    keys: payouts.map((a) => a.key),
+    xp: payoutXp(payouts),
+    names: payouts.map((a) => a.label ?? ''),
+  };
+}
 import { DEFAULT_CATEGORIES, DEFAULT_DAY_MARKS } from './types';
 import type {
   AwardLedger,
@@ -562,17 +579,17 @@ describe('payout', () => {
   });
 
   it('pays a finished quest once', () => {
-    const first = questPayout(NONE, [complete('q1')], []);
+    const first = payout(NONE, [complete('q1')], []);
     expect(first.keys).toEqual([questKey('q1')]);
     expect(first.xp).toBe(200);
 
     const held: AwardLedger = { granted: [questKey('q1')] };
-    expect(questPayout(held, [complete('q1')], []).keys).toEqual([]);
+    expect(payout(held, [complete('q1')], []).keys).toEqual([]);
   });
 
   it('pays nothing for an unfinished quest', () => {
     const partial = { ...complete('q1'), done: 0, complete: false };
-    expect(questPayout(NONE, [partial], []).keys).toEqual([]);
+    expect(payout(NONE, [partial], []).keys).toEqual([]);
   });
 
   it('pays challenges alongside quests', () => {
@@ -585,7 +602,7 @@ describe('payout', () => {
       total: 1,
       complete: true,
     };
-    const r = questPayout(NONE, [complete('q1')], [ch]);
+    const r = payout(NONE, [complete('q1')], [ch]);
     expect(r.keys).toHaveLength(2);
     expect(r.xp).toBe(260);
     expect(r.names).toEqual(['Done thing', 'Before lunch']);
@@ -605,8 +622,9 @@ describe('payout', () => {
     // There is no failure state to test for. What this asserts is that an unfinished
     // quest simply produces no payout and no other signal.
     const partial = { ...complete('q1'), complete: false };
-    const r = questPayout(NONE, [partial], []);
-    expect(r).toEqual({ keys: [], xp: 0, names: [] });
+    const r = payout(NONE, [partial], []);
+    expect(r.payouts).toEqual([]);
+    expect(r.xp).toBe(0);
   });
 });
 
@@ -660,5 +678,42 @@ describe('the scored era', () => {
     expect(gated.dates).toEqual([]);
     expect(runQuests(gated)).toEqual([]);
     expect(heavyDayQuest(gated)).toEqual([]);
+  });
+});
+
+describe('the draw pools are frozen', () => {
+  /**
+   * A guard, not a preference.
+   *
+   * `pick` is `seedFrom(key) % items.length`, so a pool's LENGTH is part of the answer
+   * for every seed. Adding or removing an entry re-rolls every date and week, including
+   * ones already paid — and since a payout key embeds the drawn spec's id, the week in
+   * progress can pay twice for the same day under two different names.
+   *
+   * These numbers exist so that change cannot happen by accident. If you are here
+   * because this test failed: the pool changed, every draw moved, and that needs to be a
+   * decision rather than a side effect. See the note above WILDCARDS in quests.ts.
+   */
+  it('holds the counts every past draw was made against', () => {
+    expect(WILDCARDS).toHaveLength(8);
+    expect(DAILY_CHALLENGES).toHaveLength(6);
+    expect(WEEKLY_CHALLENGES).toHaveLength(4);
+  });
+
+  it('keeps ids unique within each pool, since payout keys are built from them', () => {
+    for (const pool of [WILDCARDS, DAILY_CHALLENGES, WEEKLY_CHALLENGES]) {
+      const ids = pool.map((s) => s.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+
+  it('draws the same entry for the same key every time', () => {
+    // The property the frozen counts protect: a given date always draws the same
+    // challenge, so its progress and its payout key are stable across launches.
+    for (const key of ['2026-07-30', '2026-08-01', '2026-12-25']) {
+      expect(pick(DAILY_CHALLENGES, `daily:${key}`).id).toBe(
+        pick(DAILY_CHALLENGES, `daily:${key}`).id
+      );
+    }
   });
 });

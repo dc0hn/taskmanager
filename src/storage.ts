@@ -29,7 +29,8 @@ import type {
 import { uid } from './utils/id';
 import { emptyProgress } from './progress';
 import { emptyAwards, emptyStreak } from './streaks';
-import { emptyShop, itemById, type ShopState } from './shop';
+import { emptyShop, itemById, pruneBoostedDates, type ShopState } from './shop';
+import { toDateKey } from './utils/time';
 
 // ============================================================================
 // Persistence
@@ -797,7 +798,7 @@ export function saveAwards(ledger: AwardLedger): void {
 // The shop
 // ---------------------------------------------------------------------------
 
-export function loadShop(): ShopState {
+export function loadShop(today = toDateKey(new Date())): ShopState {
   const parsed = read<Record<string, unknown>>(SHOP_KEY);
   if (!parsed || typeof parsed !== 'object') return emptyShop();
 
@@ -851,8 +852,11 @@ export function loadShop(): ShopState {
     owned,
     stock,
     equipped,
+    // Trimmed by date, never by count — see `pruneBoostedDates`. A length cap here
+    // was silently un-boosting the oldest days, and reconciliation then took their
+    // doubled XP back out of the lifetime total.
     boostedDates: Array.isArray(parsed.boostedDates)
-      ? parsed.boostedDates.filter(isDateKey).slice(-60)
+      ? pruneBoostedDates(parsed.boostedDates.filter(isDateKey), today)
       : [],
     rerolls,
   };

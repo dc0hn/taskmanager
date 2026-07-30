@@ -15,6 +15,7 @@ import {
   matchMark,
   monthsCovered,
   rowsNeeded,
+  sampleSize,
   type GridFrame,
 } from '../daymarks';
 import { formatMonthKey } from '../month';
@@ -184,11 +185,21 @@ export default function DayMarkImport({
     const el = imgRef.current;
     if (!el || !src) return;
 
+    // Bounded rather than taken from the image, because the image comes from the
+    // clipboard and its size is not ours to assume. See `sampleSize`.
+    const size = sampleSize(natural.w, natural.h);
+    if (size.w === 0 || size.h === 0) {
+      onNotify('That image has no dimensions to read.');
+      return;
+    }
+
+    // The frame is normalised 0..1, so it maps onto the sampling surface directly and
+    // nothing downstream needs to know whether scaling happened.
     const px: GridFrame = {
-      x: frame.x * natural.w,
-      y: frame.y * natural.h,
-      w: frame.w * natural.w,
-      h: frame.h * natural.h,
+      x: frame.x * size.w,
+      y: frame.y * size.h,
+      w: frame.w * size.w,
+      h: frame.h * size.h,
     };
     if (!frameIsUsable(px)) {
       onNotify('Drag a box around the calendar grid first — that frame is too small.');
@@ -196,15 +207,24 @@ export default function DayMarkImport({
     }
 
     const canvas = document.createElement('canvas');
-    canvas.width = natural.w;
-    canvas.height = natural.h;
+    canvas.width = size.w;
+    canvas.height = size.h;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) {
       onNotify('This machine could not open a canvas to read the image.');
       return;
     }
-    ctx.drawImage(el, 0, 0, natural.w, natural.h);
-    const data = ctx.getImageData(0, 0, natural.w, natural.h).data;
+    let data: Uint8ClampedArray;
+    try {
+      ctx.drawImage(el, 0, 0, size.w, size.h);
+      data = ctx.getImageData(0, 0, size.w, size.h).data;
+    } catch (e) {
+      // Even inside the cap an engine may refuse the allocation. Saying so beats a
+      // half-finished import.
+      console.error('Almanac: could not read the pasted image', e);
+      onNotify('That image could not be read. Try a smaller screenshot.');
+      return;
+    }
 
     // An import only ADDS. A day the sampler didn't recognise gets no entry at all,
     // rather than an explicit null, so anything already marked there survives — one
@@ -216,7 +236,9 @@ export default function DayMarkImport({
     const seen: Record<string, string> = {};
     for (const cell of gridCells(firstCell, rows)) {
       const rect = cellRect(px, rows, cell.row, cell.col, CELL_INSET);
-      const sample = dominantMarkColor(data, natural.w, rect);
+      // `size.w`, not `natural.w` — this is the row stride of the buffer that was
+      // actually read, and on a scaled image the two differ.
+      const sample = dominantMarkColor(data, size.w, rect);
       const id = sample ? matchMark(sample.rgb, defs, tolerance) : null;
       if (!id) continue;
       next[cell.date] = id;

@@ -554,6 +554,32 @@ export interface AwardLedger {
   granted: string[];
 }
 
+/**
+ * One award and exactly what it pays.
+ *
+ * The unit every producer of one-off awards deals in, and the reason is a bug class
+ * rather than tidiness. Producers used to return a list of keys alongside a single
+ * summed XP figure, which is only correct while every key in the list is new. The
+ * ledger decides that, and it decides it *after* the sum was taken — so a list where
+ * one key had already been paid still handed over the total for all of them.
+ *
+ * Pairing each key with its own XP makes the sum a consequence of what was granted
+ * instead of a claim made before anyone checked.
+ */
+export interface AwardPayout {
+  key: string;
+  xp: number;
+  /** Discipline to credit, for awards that belong to one. */
+  discipline?: DisciplineId;
+  /** What to call it on screen. */
+  label?: string;
+}
+
+/** Sum only what was actually granted. */
+export function payoutXp(payouts: AwardPayout[]): number {
+  return payouts.reduce((sum, p) => sum + p.xp, 0);
+}
+
 // ---------------------------------------------------------------------------
 // Badges
 // ---------------------------------------------------------------------------

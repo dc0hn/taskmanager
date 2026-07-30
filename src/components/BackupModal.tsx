@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, ClipboardCopy, Download, Upload, X } from 'lucide-react';
+import { Check, ClipboardCopy, Download, HardDriveDownload, Upload, X } from 'lucide-react';
 import { exportAll, importAll } from '../storage';
+import {
+  backendAvailable,
+  loadSnapshotRecord,
+  takeSnapshot,
+  type SnapshotRecord,
+} from '../snapshot';
 
 // ============================================================================
 // BackupModal — the escape hatch.
@@ -179,6 +185,8 @@ export default function BackupModal({ open, today, onClose, onNotify }: Props) {
                     )}
                   </button>
                 </div>
+
+                <SnapshotRow today={today} onNotify={onNotify} />
               </>
             ) : (
               <>
@@ -237,6 +245,84 @@ export default function BackupModal({ open, today, onClose, onNotify }: Props) {
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * The automatic copy, and where it lives.
+ *
+ * Shown next to the manual export rather than hidden in settings, because the question
+ * this answers — "is anything actually backing this up?" — is the same question the
+ * export tab exists for. A snapshot the user cannot confirm is running is not a comfort.
+ *
+ * The path is displayed in full and selectable. Knowing the file exists is not much use
+ * without being able to go and find it.
+ */
+function SnapshotRow({
+  today,
+  onNotify,
+}: {
+  today: string;
+  onNotify: (message: string) => void;
+}) {
+  const [record, setRecord] = useState<SnapshotRecord>(() => loadSnapshotRecord());
+  const [busy, setBusy] = useState(false);
+
+  if (!backendAvailable()) {
+    return (
+      <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--rule-1)' }}>
+        <div className="font-mono text-[10.5px] text-bone-4">
+          Automatic snapshots need the desktop app. This is the dev server, which has its
+          own separate store.
+        </div>
+      </div>
+    );
+  }
+
+  async function run() {
+    setBusy(true);
+    const outcome = await takeSnapshot(today);
+    setRecord(loadSnapshotRecord());
+    setBusy(false);
+    onNotify(outcome.message);
+  }
+
+  return (
+    <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--rule-1)' }}>
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="font-mono text-[10.5px] text-bone-2 tracking-wide">
+            AUTOMATIC SNAPSHOT
+          </div>
+          <div className="font-mono text-[10.5px] text-bone-3 mt-0.5">
+            {record.lastOn
+              ? `Last taken ${record.lastOn}. Written once a day while the app is open.`
+              : 'Not taken yet. One will be written shortly after launch.'}
+          </div>
+          {record.path && (
+            <div
+              className="font-mono text-[9.5px] text-bone-4 mt-1 break-all select-text"
+              title={record.path}
+            >
+              {record.path}
+            </div>
+          )}
+          {record.error && (
+            <div className="font-mono text-[9.5px] mt-1" style={{ color: 'var(--warn)' }}>
+              Last attempt failed: {record.error}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={run}
+          disabled={busy}
+          className="btn-quiet inline-flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg shrink-0 disabled:opacity-50"
+        >
+          <HardDriveDownload size={13} strokeWidth={2.2} />
+          {busy ? 'Writing…' : 'Snapshot now'}
+        </button>
+      </div>
+    </div>
   );
 }
 

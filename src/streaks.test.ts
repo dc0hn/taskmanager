@@ -25,7 +25,8 @@ import {
   shiftDay,
   todayQualifies,
 } from './streaks';
-import type { DailyStat, DayMarks } from './types';
+import type { AwardLedger, AwardPayout, DailyStat, DayMarks } from './types';
+import { payoutXp } from './types';
 
 function stat(date: string, planned: number, done: number): DailyStat {
   return {
@@ -239,17 +240,17 @@ describe('resolveStreak', () => {
     ]);
     const start = { ...emptyStreak(), freezes: 0 };
     const r = resolveStreak(start, stats, NO_MARKS, '2026-07-28');
-    expect(r.awards).toEqual(['comeback:2026-07-25']);
-    expect(r.xp).toBe(COMEBACK_XP);
+    expect(r.payouts.map((x) => x.key)).toEqual(['comeback:2026-07-25']);
+    expect(payoutXp(r.payouts)).toBe(COMEBACK_XP);
     // And not again on the day after.
-    expect(r.awards).toHaveLength(1);
+    expect(r.payouts).toHaveLength(1);
   });
 
   it('does not pay a comeback for a run that never lapsed', () => {
     const stats = history('2026-07-27', [[300, 300], [300, 300], [300, 300]]);
     const r = resolveStreak(emptyStreak(), stats, NO_MARKS, '2026-07-30');
-    expect(r.awards).toEqual([]);
-    expect(r.xp).toBe(0);
+    expect(r.payouts).toEqual([]);
+    expect(payoutXp(r.payouts)).toBe(0);
   });
 
   it('holds the run across a marked travel day without spending a freeze', () => {
@@ -409,29 +410,56 @@ describe('the award ledger', () => {
     expect(grantAwards(quest.ledger, ['badge:first-block']).granted).toEqual([]);
     expect(grantAwards(quest.ledger, ['quest:two-deep']).granted).toEqual([]);
   });
+
+  /**
+   * Why awards carry their own XP instead of arriving as a list plus one total.
+   *
+   * `resolveStreak` is the only producer that never sees the ledger — it walks days and
+   * reports what they earned. A single walk can raise several keys at once, and a summed
+   * figure is only correct if every one of them turns out to be new. The caller cannot
+   * tell, so with a summed figure it paid the lot the moment ANY key was fresh.
+   */
+  it('lets a caller pay only for the keys the ledger accepted', () => {
+    const offered: AwardPayout[] = [
+      { key: 'streak:2026-07-01:7', xp: 120 },
+      { key: 'comeback:2026-06-28', xp: 30 },
+    ];
+    // The comeback has already been paid; only the milestone is new.
+    const held: AwardLedger = { granted: ['comeback:2026-06-28'] };
+
+    const { granted } = grantAwards(held, offered.map((p) => p.key));
+    const paid = offered.filter((p) => granted.includes(p.key));
+
+    expect(paid.map((p) => p.key)).toEqual(['streak:2026-07-01:7']);
+    // The correct figure is the milestone alone...
+    expect(payoutXp(paid)).toBe(120);
+    // ...and NOT the sum of everything that was offered, which is what an all-or-nothing
+    // guard on a pre-summed total would have handed over.
+    expect(payoutXp(offered)).toBe(150);
+  });
 });
 
 describe('routineAwardsDue', () => {
   it('pays each milestone as it is passed', () => {
     const r = routineAwardsDue(emptyAwards(), [{ templateId: 't1', current: 7 }]);
-    expect(r.keys).toEqual(['routine:t1:7']);
-    expect(r.xp).toBe(ROUTINE_MILESTONES[0].xp);
+    expect(r.map((p) => p.key)).toEqual(['routine:t1:7']);
+    expect(payoutXp(r)).toBe(ROUTINE_MILESTONES[0].xp);
   });
 
   it('pays every milestone already cleared by a long streak', () => {
     const r = routineAwardsDue(emptyAwards(), [{ templateId: 't1', current: 120 }]);
-    expect(r.keys).toEqual(['routine:t1:7', 'routine:t1:30', 'routine:t1:100']);
-    expect(r.xp).toBe(600);
+    expect(r.map((p) => p.key)).toEqual(['routine:t1:7', 'routine:t1:30', 'routine:t1:100']);
+    expect(payoutXp(r)).toBe(600);
   });
 
   it('does not pay one already held', () => {
     const ledger = { granted: ['routine:t1:7'] };
     const r = routineAwardsDue(ledger, [{ templateId: 't1', current: 30 }]);
-    expect(r.keys).toEqual(['routine:t1:30']);
+    expect(r.map((p) => p.key)).toEqual(['routine:t1:30']);
   });
 
   it('pays nothing below the first milestone', () => {
-    expect(routineAwardsDue(emptyAwards(), [{ templateId: 't1', current: 6 }]).keys).toEqual([]);
+    expect(routineAwardsDue(emptyAwards(), [{ templateId: 't1', current: 6 }])).toEqual([]);
   });
 
   it('keeps separate routines separate', () => {
@@ -439,7 +467,7 @@ describe('routineAwardsDue', () => {
       { templateId: 'a', current: 7 },
       { templateId: 'b', current: 7 },
     ]);
-    expect(r.keys).toEqual(['routine:a:7', 'routine:b:7']);
+    expect(r.map((p) => p.key)).toEqual(['routine:a:7', 'routine:b:7']);
   });
 });
 
@@ -514,8 +542,8 @@ describe('day-streak milestones', () => {
   it('pays at seven days', () => {
     const stats = history('2026-07-01', Array.from({ length: 7 }, () => [300, 300] as [number, number]));
     const r = resolveStreak(emptyStreak(), stats, NO_MARKS, '2026-07-08');
-    expect(r.awards).toContain('streak:2026-07-01:7');
-    expect(r.xp).toBe(STREAK_MILESTONES[0].xp);
+    expect(r.payouts.map((x) => x.key)).toContain('streak:2026-07-01:7');
+    expect(payoutXp(r.payouts)).toBe(STREAK_MILESTONES[0].xp);
   });
 
   it('pays more than the routine equivalent, because it is harder', () => {
@@ -533,7 +561,7 @@ describe('day-streak milestones', () => {
       ...Array.from({ length: 7 }, () => [300, 300] as [number, number]),
     ]);
     const r = resolveStreak(emptyStreak(), stats, NO_MARKS, '2026-07-25');
-    const sevens = r.awards.filter((k) => k.endsWith(':7'));
+    const sevens = r.payouts.map((x) => x.key).filter((k) => k.endsWith(':7'));
     expect(sevens).toHaveLength(2);
     expect(new Set(sevens).size).toBe(2); // distinct keys, so both can be paid
   });
@@ -541,9 +569,10 @@ describe('day-streak milestones', () => {
   it('pays each milestone once within one run', () => {
     const stats = history('2026-07-01', Array.from({ length: 20 }, () => [300, 300] as [number, number]));
     const r = resolveStreak(emptyStreak(), stats, NO_MARKS, '2026-07-21');
-    expect(r.awards.filter((k) => k.endsWith(':7'))).toHaveLength(1);
-    expect(r.awards.filter((k) => k.endsWith(':14'))).toHaveLength(1);
-    expect(r.awards.filter((k) => k.endsWith(':30'))).toHaveLength(0);
+    const keys = r.payouts.map((x) => x.key);
+    expect(keys.filter((k) => k.endsWith(':7'))).toHaveLength(1);
+    expect(keys.filter((k) => k.endsWith(':14'))).toHaveLength(1);
+    expect(keys.filter((k) => k.endsWith(':30'))).toHaveLength(0);
   });
 
   it('mints brass for every kept day', () => {
@@ -564,7 +593,7 @@ describe('day-streak milestones', () => {
     const second = resolveStreak(first.state, stats, NO_MARKS, '2026-07-09');
     expect(second.changed).toBe(false);
     expect(second.brass).toBe(0);
-    expect(second.awards).toEqual([]);
+    expect(second.payouts).toEqual([]);
   });
 });
 

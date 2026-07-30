@@ -822,6 +822,40 @@ describe('areaTotals', () => {
   it('is empty for no days', () => {
     expect(areaTotals([], CATS)).toEqual({ byCategory: {}, byDiscipline: {} });
   });
+
+  it('scales a boosted day so the areas track the total', () => {
+    // Without this the meter read double and every category it came from read single,
+    // which is the same work reported two different ways on one screen.
+    const days = [
+      {
+        date: '2026-07-30',
+        blocks: [block({ start: 540, end: 660, category: 'deep', completed: true })],
+      },
+    ];
+    const plain = areaTotals(days, CATS);
+    const boosted = areaTotals(days, CATS, { '2026-07-30': 2 });
+
+    expect(boosted.byCategory.deep).toBe(plain.byCategory.deep * 2);
+    expect(boosted.byDiscipline.focus).toBe((plain.byDiscipline.focus ?? 0) * 2);
+    expect(boosted.byDiscipline.endurance).toBe((plain.byDiscipline.endurance ?? 0) * 2);
+  });
+
+  it('leaves unboosted days in a boosted map alone', () => {
+    const days = [
+      {
+        date: '2026-07-29',
+        blocks: [block({ start: 540, end: 660, category: 'deep', completed: true })],
+      },
+      {
+        date: '2026-07-30',
+        blocks: [block({ start: 540, end: 660, category: 'deep', completed: true })],
+      },
+    ];
+    const one = areaTotals([days[0]], CATS);
+    const mixed = areaTotals(days, CATS, { '2026-07-30': 2 });
+    // One plain day plus one doubled day.
+    expect(mixed.byCategory.deep).toBe(one.byCategory.deep * 3);
+  });
 });
 
 describe('the scored era', () => {

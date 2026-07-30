@@ -24,6 +24,26 @@ import { emptyProgress, CYCLE_XP, xpToReachLevel } from './progress';
 import { emptyStreak } from './streaks';
 import { DEFAULT_CATEGORIES } from './types';
 import type { AwardLedger, Block, DailyStat, DayMarks } from './types';
+import type { AwardPayout } from './types';
+import { payoutXp } from './types';
+
+/**
+ * Test shim over `evaluateBadges`, which now returns payouts rather than three
+ * parallel arrays.
+ *
+ * These tests are about which badges fire, so they read `.ids`. Production code
+ * deliberately does not get this convenience: it sums XP from the payouts the ledger
+ * actually accepted, which is the entire point of the payout shape.
+ */
+function evaluated(ledger: AwardLedger, ctx: BadgeContext) {
+  const payouts: AwardPayout[] = evaluateBadges(ledger, ctx);
+  return {
+    payouts,
+    keys: payouts.map((x) => x.key),
+    ids: payouts.map((x) => badgeIdFromKey(x.key)),
+    xp: payoutXp(payouts),
+  };
+}
 
 const CATS = DEFAULT_CATEGORIES;
 const TODAY = '2026-07-30';
@@ -144,29 +164,29 @@ describe('the library', () => {
 
 describe('milestone conditions', () => {
   it('fires First Light on the first block', () => {
-    expect(evaluateBadges(NONE, ctx({ blocksCompleted: 1 })).ids).toContain('first-block');
-    expect(evaluateBadges(NONE, ctx({ blocksCompleted: 0 })).ids).not.toContain('first-block');
+    expect(evaluated(NONE, ctx({ blocksCompleted: 1 })).ids).toContain('first-block');
+    expect(evaluated(NONE, ctx({ blocksCompleted: 0 })).ids).not.toContain('first-block');
   });
 
   it('fires each count badge at its threshold', () => {
-    const at = (n: number) => evaluateBadges(NONE, ctx({ blocksCompleted: n })).ids;
+    const at = (n: number) => evaluated(NONE, ctx({ blocksCompleted: n })).ids;
     expect(at(9)).not.toContain('blocks-10');
     expect(at(10)).toContain('blocks-10');
     expect(at(250)).toContain('blocks-250');
   });
 
   it('fires level badges', () => {
-    expect(evaluateBadges(NONE, ctx({ level: 5 })).ids).toContain('level-5');
-    expect(evaluateBadges(NONE, ctx({ level: 4 })).ids).not.toContain('level-5');
+    expect(evaluated(NONE, ctx({ level: 5 })).ids).toContain('level-5');
+    expect(evaluated(NONE, ctx({ level: 4 })).ids).not.toContain('level-5');
   });
 
   it('fires Full Circle on a prestige', () => {
-    expect(evaluateBadges(NONE, ctx({ prestige: 1 })).ids).toContain('prestige-1');
+    expect(evaluated(NONE, ctx({ prestige: 1 })).ids).toContain('prestige-1');
   });
 
   it('reads streak badges from the best run, not the current one', () => {
     // Otherwise a reset would revoke the fact that you once kept thirty days.
-    const ids = evaluateBadges(NONE, ctx({ streakCurrent: 0, streakLongest: 30 })).ids;
+    const ids = evaluated(NONE, ctx({ streakCurrent: 0, streakLongest: 30 })).ids;
     expect(ids).toContain('streak-7');
     expect(ids).toContain('streak-30');
   });
@@ -174,62 +194,62 @@ describe('milestone conditions', () => {
 
 describe('behavioural conditions', () => {
   it('fires Before the Bell only for a genuinely early finish', () => {
-    expect(evaluateBadges(NONE, ctx({ todayEarliest: 8 * 60 })).ids).toContain('early-bird');
-    expect(evaluateBadges(NONE, ctx({ todayEarliest: 9 * 60 })).ids).not.toContain('early-bird');
+    expect(evaluated(NONE, ctx({ todayEarliest: 8 * 60 })).ids).toContain('early-bird');
+    expect(evaluated(NONE, ctx({ todayEarliest: 9 * 60 })).ids).not.toContain('early-bird');
   });
 
   it('fires Dawn Patrol and Before the Bell together before 7am', () => {
-    const ids = evaluateBadges(NONE, ctx({ todayEarliest: 6 * 60 + 30 })).ids;
+    const ids = evaluated(NONE, ctx({ todayEarliest: 6 * 60 + 30 })).ids;
     expect(ids).toContain('dawn-patrol');
     expect(ids).toContain('early-bird');
   });
 
   it('fires After Hours from 9pm', () => {
-    expect(evaluateBadges(NONE, ctx({ todayLatest: 21 * 60 })).ids).toContain('night-owl');
-    expect(evaluateBadges(NONE, ctx({ todayLatest: 20 * 60 + 59 })).ids).not.toContain('night-owl');
+    expect(evaluated(NONE, ctx({ todayLatest: 21 * 60 })).ids).toContain('night-owl');
+    expect(evaluated(NONE, ctx({ todayLatest: 20 * 60 + 59 })).ids).not.toContain('night-owl');
   });
 
   it('fires Clean Sweep only when the day is actually finished', () => {
     // Guarding on `todayClearedAt` rather than on the clock stops a half-done
     // morning claiming a swept day.
-    expect(evaluateBadges(NONE, ctx({ todayClearedAt: 11 * 60 })).ids).toContain('clean-sweep');
-    expect(evaluateBadges(NONE, ctx({ todayClearedAt: null, todayLatest: 11 * 60 })).ids)
+    expect(evaluated(NONE, ctx({ todayClearedAt: 11 * 60 })).ids).toContain('clean-sweep');
+    expect(evaluated(NONE, ctx({ todayClearedAt: null, todayLatest: 11 * 60 })).ids)
       .not.toContain('clean-sweep');
   });
 
   it('fires Finally for something moved three times', () => {
-    expect(evaluateBadges(NONE, ctx({ todayMaxMoves: 3 })).ids).toContain('finally');
-    expect(evaluateBadges(NONE, ctx({ todayMaxMoves: 2 })).ids).not.toContain('finally');
+    expect(evaluated(NONE, ctx({ todayMaxMoves: 3 })).ids).toContain('finally');
+    expect(evaluated(NONE, ctx({ todayMaxMoves: 2 })).ids).not.toContain('finally');
   });
 
   it('fires Deep Diver on three high-priority blocks', () => {
-    expect(evaluateBadges(NONE, ctx({ todayHighPriority: 3 })).ids).toContain('deep-diver');
-    expect(evaluateBadges(NONE, ctx({ todayHighPriority: 2 })).ids).not.toContain('deep-diver');
+    expect(evaluated(NONE, ctx({ todayHighPriority: 3 })).ids).toContain('deep-diver');
+    expect(evaluated(NONE, ctx({ todayHighPriority: 2 })).ids).not.toContain('deep-diver');
   });
 
   it('fires Full Spread on three categories', () => {
-    expect(evaluateBadges(NONE, ctx({ todayDistinctCategories: 3 })).ids).toContain('full-spread');
+    expect(evaluated(NONE, ctx({ todayDistinctCategories: 3 })).ids).toContain('full-spread');
   });
 
   it('fires the comeback badge only on the day it is paid', () => {
-    expect(evaluateBadges(NONE, ctx({ comebackToday: true })).ids).toContain('comeback');
-    expect(evaluateBadges(NONE, ctx({ comebackToday: false })).ids).not.toContain('comeback');
+    expect(evaluated(NONE, ctx({ comebackToday: true })).ids).toContain('comeback');
+    expect(evaluated(NONE, ctx({ comebackToday: false })).ids).not.toContain('comeback');
   });
 });
 
 describe('effort conditions', () => {
   it('fires Heavy Lifter above two hours, not at it', () => {
-    expect(evaluateBadges(NONE, ctx({ todayLongestBlock: 121 })).ids).toContain('heavy-lifter');
-    expect(evaluateBadges(NONE, ctx({ todayLongestBlock: 120 })).ids).not.toContain('heavy-lifter');
+    expect(evaluated(NONE, ctx({ todayLongestBlock: 121 })).ids).toContain('heavy-lifter');
+    expect(evaluated(NONE, ctx({ todayLongestBlock: 120 })).ids).not.toContain('heavy-lifter');
   });
 
   it('fires Focus Marathon at four hours of deep work', () => {
-    expect(evaluateBadges(NONE, ctx({ todayFocusMinutes: 240 })).ids).toContain('focus-marathon');
-    expect(evaluateBadges(NONE, ctx({ todayFocusMinutes: 239 })).ids).not.toContain('focus-marathon');
+    expect(evaluated(NONE, ctx({ todayFocusMinutes: 240 })).ids).toContain('focus-marathon');
+    expect(evaluated(NONE, ctx({ todayFocusMinutes: 239 })).ids).not.toContain('focus-marathon');
   });
 
   it('fires Big Day at 500 XP', () => {
-    expect(evaluateBadges(NONE, ctx({ bestDayXp: 500 })).ids).toContain('big-day');
+    expect(evaluated(NONE, ctx({ bestDayXp: 500 })).ids).toContain('big-day');
   });
 });
 
@@ -238,23 +258,23 @@ describe('effort conditions', () => {
 describe('evaluateBadges', () => {
   it('never re-awards one already held', () => {
     const held: AwardLedger = { granted: [badgeKey('first-block')] };
-    const r = evaluateBadges(held, ctx({ blocksCompleted: 5 }));
+    const r = evaluated(held, ctx({ blocksCompleted: 5 }));
     expect(r.ids).not.toContain('first-block');
   });
 
   it('sums the XP of everything it grants', () => {
-    const r = evaluateBadges(NONE, ctx({ blocksCompleted: 10 }));
+    const r = evaluated(NONE, ctx({ blocksCompleted: 10 }));
     const expected = r.ids.reduce((s, id) => s + badgeById(id)!.xp, 0);
     expect(r.xp).toBe(expected);
   });
 
   it('awards nothing for an empty day', () => {
-    expect(evaluateBadges(NONE, ctx()).ids).toEqual([]);
-    expect(evaluateBadges(NONE, ctx()).xp).toBe(0);
+    expect(evaluated(NONE, ctx()).ids).toEqual([]);
+    expect(evaluated(NONE, ctx()).xp).toBe(0);
   });
 
   it('can award several at once', () => {
-    const r = evaluateBadges(NONE, ctx({ blocksCompleted: 250, level: 25 }));
+    const r = evaluated(NONE, ctx({ blocksCompleted: 250, level: 25 }));
     expect(r.ids.length).toBeGreaterThan(3);
   });
 });
@@ -312,7 +332,7 @@ describe('badgeContext', () => {
     const c = badgeContext({ ...base, stats: {}, todayBlocks: blocks });
     expect(c.todayEarliest).toBeNull();
     expect(c.todayLatest).toBeNull();
-    expect(evaluateBadges(NONE, c).ids).not.toContain('dawn-patrol');
+    expect(evaluated(NONE, c).ids).not.toContain('dawn-patrol');
   });
 
   it('sets clearedAt only for a finished day', () => {

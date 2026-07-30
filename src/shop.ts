@@ -1,6 +1,6 @@
 import type { UserProgress } from './types';
-import { standingFor } from './progress';
-import { daysBetween } from './streaks';
+import { standingFor, STAT_RETENTION_DAYS } from './progress';
+import { daysBetween, shiftDay } from './streaks';
 
 // ============================================================================
 // The shop
@@ -498,12 +498,38 @@ export function spendRefill(shop: ShopState): ConsumeResult {
   return next ? { ok: true, shop: next } : { ok: false, shop };
 }
 
-/** Spend a booster on a day. Refuses a day already boosted. */
+/**
+ * Spend a booster on a day. Refuses a day already boosted.
+ *
+ * Note what this does NOT do: cap the list by length. It used to keep the last sixty,
+ * and a count cap on this particular list is a retroactive clawback waiting to happen.
+ * Reconciliation recomputes a day's XP from its blocks on every visit, so the moment a
+ * date fell off the end its boost silently became a one — and the next time the month
+ * view loaded that day, the delta took the doubled half of its XP straight back out of
+ * the lifetime total, months after it was earned.
+ *
+ * Growth is not a concern: an entry costs a purchased booster, so the list is rate
+ * limited by brass, and `pruneBoostedDates` trims by date on load.
+ */
 export function spendBoost(shop: ShopState, date: string): ConsumeResult {
   if (shop.boostedDates.includes(date)) return { ok: false, shop };
   const next = take(shop, 'boost-day');
   if (!next) return { ok: false, shop };
-  return { ok: true, shop: { ...next, boostedDates: [...next.boostedDates, date].slice(-60) } };
+  return { ok: true, shop: { ...next, boostedDates: [...next.boostedDates, date] } };
+}
+
+/**
+ * Drop boosted dates that no reconciliation can reach any more.
+ *
+ * Bounded by DATE against the same window day stats use, not by count. Once a day is
+ * outside the retention window it is never reconciled again, so forgetting its boost
+ * costs nothing — its XP is already banked in the lifetime total and its stat is gone.
+ * That is the difference between this and a length cap: one drops records that can no
+ * longer change an answer, the other drops records that still can.
+ */
+export function pruneBoostedDates(dates: string[], today: string): string[] {
+  const cutoff = shiftDay(today, -STAT_RETENTION_DAYS);
+  return dates.filter((d) => d >= cutoff);
 }
 
 /** Spend a reroll on this week's wildcard. */

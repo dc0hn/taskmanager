@@ -457,6 +457,20 @@ export function reckonDay(
       minutes: 0,
       notes: ['from a double-XP day'],
     });
+
+    // The area figures have to move with the total, or a boosted day shows up as
+    // double XP on the meter and single XP on every category and discipline it came
+    // from — the same work reported two ways.
+    //
+    // These are proportional rather than exact, and always were: the day-cleared
+    // bonus is not attributable to any one category either, so the areas have never
+    // summed to `xpEarned`. Scaling keeps their relationship to the total intact,
+    // which is what a boosted day needs.
+    for (const id of Object.keys(byCategory)) byCategory[id] = Math.round(byCategory[id] * boost);
+    for (const id of Object.keys(byDiscipline)) {
+      const key = id as DisciplineId;
+      byDiscipline[key] = Math.round((byDiscipline[key] ?? 0) * boost);
+    }
   }
 
   const brassEarned = xpEarned > 0 ? Math.max(1, Math.round(xpEarned * BRASS_PER_XP)) : 0;
@@ -674,10 +688,18 @@ export function brassEarned(progress: UserProgress): number {
   return progress.brass + progress.brassSpent;
 }
 
-/** Category and discipline XP totals across every day held in memory. */
+/**
+ * Category and discipline XP totals across every day held in memory.
+ *
+ * Takes the same per-day boost map as `reconcileDays` and for the same reason: these
+ * totals are recomputed from blocks on every render, so a boost left out here would
+ * make the areas disagree with the lifetime figure they are supposed to break down.
+ */
 export function areaTotals(
   days: { date: string; blocks: Block[] }[],
-  categories: CategoryDef[]
+  categories: CategoryDef[],
+  /** Per-day multipliers from purchased boosters. Absent means one. */
+  boosts: Record<string, number> = {}
 ): {
   byCategory: Record<string, number>;
   byDiscipline: Partial<Record<DisciplineId, number>>;
@@ -685,7 +707,7 @@ export function areaTotals(
   const byCategory: Record<string, number> = {};
   const byDiscipline: Partial<Record<DisciplineId, number>> = {};
   for (const day of days) {
-    const r = reckonDay(day.date, day.blocks, categories);
+    const r = reckonDay(day.date, day.blocks, categories, boosts[day.date] ?? 1);
     for (const [id, xp] of Object.entries(r.byCategory)) {
       byCategory[id] = (byCategory[id] ?? 0) + xp;
     }

@@ -1,5 +1,6 @@
 import type {
   AwardLedger,
+  AwardPayout,
   BadgeDef,
   Block,
   CategoryDef,
@@ -560,30 +561,19 @@ function bestComboOf(ordered: Block[]): number {
 // Evaluation
 // ---------------------------------------------------------------------------
 
-export interface BadgeEvaluation {
-  /** Award keys for badges newly satisfied and not already held. */
-  keys: string[];
-  ids: string[];
-  xp: number;
-}
-
 /** Which badges are now earned but not yet granted. */
 export function evaluateBadges(
   ledger: AwardLedger,
   context: BadgeContext
-): BadgeEvaluation {
-  const keys: string[] = [];
-  const ids: string[] = [];
-  let xp = 0;
+): AwardPayout[] {
+  const payouts: AwardPayout[] = [];
   for (const badge of BADGES) {
     const key = badgeKey(badge.id);
     if (ledger.granted.includes(key)) continue;
     if (!badge.test(context)) continue;
-    keys.push(key);
-    ids.push(badge.id);
-    xp += badge.xp;
+    payouts.push({ key, xp: badge.xp, label: badge.name });
   }
-  return { keys, ids, xp };
+  return payouts;
 }
 
 export interface BadgeStatus {

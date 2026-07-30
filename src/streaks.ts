@@ -1,4 +1,11 @@
-import type { AwardLedger, DailyStat, DayMarks, DayOutcome, StreakState } from './types';
+import type {
+  AwardLedger,
+  AwardPayout,
+  DailyStat,
+  DayMarks,
+  DayOutcome,
+  StreakState,
+} from './types';
 import { dayScore } from './progress';
 
 // ============================================================================
@@ -163,11 +170,18 @@ export interface StreakResolution {
   state: StreakState;
   /** Every day walked, oldest first. Empty when nothing was pending. */
   days: ResolvedDay[];
-  /** Award keys earned during resolution, to be paid once. */
-  awards: string[];
-  /** XP owed for those awards. */
-  xp: number;
-  /** Brass owed — kept-day bonuses plus a share of the award XP. */
+  /**
+   * Awards earned during resolution, each carrying its own XP.
+   *
+   * Per-key rather than a list plus one total, and this producer is the reason the
+   * distinction matters. It is the only one that never sees the award ledger — it walks
+   * days and reports what they earned, with no idea what has already been paid. A
+   * single walk can raise several keys at once (a comeback and a milestone, or two
+   * milestones across a long absence), so a summed figure was only ever correct when
+   * every key in it turned out to be new. The caller could not tell, and paid the lot.
+   */
+  payouts: AwardPayout[];
+  /** Brass owed — kept-day bonuses, paid per day rather than per award. */
   brass: number;
   changed: boolean;
 }
@@ -208,8 +222,7 @@ export function resolveStreak(
     return {
       state: { ...state, resolvedThrough: shiftDay(today, -1), refilledOn: today },
       days: [],
-      awards: [],
-      xp: 0,
+      payouts: [],
       brass: 0,
       changed: state.resolvedThrough !== shiftDay(today, -1),
     };
@@ -223,10 +236,9 @@ export function resolveStreak(
   // unscored era.
   if (startedOn && cursor < startedOn) cursor = startedOn;
 
-  let next: StreakState = { ...state, frozenDates: [...state.frozenDates] };
+  const next: StreakState = { ...state, frozenDates: [...state.frozenDates] };
   const days: ResolvedDay[] = [];
-  const awards: string[] = [];
-  let xp = 0;
+  const payouts: AwardPayout[] = [];
   let brass = 0;
 
   // The freeze allowance turns over on a fixed cadence rather than being topped up
@@ -257,9 +269,8 @@ export function resolveStreak(
         for (const m of STREAK_MILESTONES) {
           if (next.current !== m.days) continue;
           const key = `streak:${next.startedOn}:${m.days}`;
-          if (!awards.includes(key)) {
-            awards.push(key);
-            xp += m.xp;
+          if (!payouts.some((p) => p.key === key)) {
+            payouts.push({ key, xp: m.xp, label: `${m.days} days running` });
           }
         }
 
@@ -267,9 +278,8 @@ export function resolveStreak(
         // date so it can never be paid twice for the same lapse.
         if (next.lastResetOn) {
           const key = `comeback:${next.lastResetOn}`;
-          if (!awards.includes(key)) {
-            awards.push(key);
-            xp += COMEBACK_XP;
+          if (!payouts.some((p) => p.key === key)) {
+            payouts.push({ key, xp: COMEBACK_XP, label: 'Back on it' });
           }
           next.lastResetOn = '';
         }
@@ -305,8 +315,7 @@ export function resolveStreak(
   return {
     state: next,
     days,
-    awards,
-    xp,
+    payouts,
     brass,
     changed: days.length > 0 || next.resolvedThrough !== state.resolvedThrough,
   };
@@ -339,19 +348,17 @@ export function grantAwards(
 export function routineAwardsDue(
   ledger: AwardLedger,
   streaks: { templateId: string; current: number }[]
-): { keys: string[]; xp: number } {
-  const keys: string[] = [];
-  let xp = 0;
+): AwardPayout[] {
+  const payouts: AwardPayout[] = [];
   for (const s of streaks) {
     for (const m of ROUTINE_MILESTONES) {
       if (s.current < m.days) continue;
       const key = `routine:${s.templateId}:${m.days}`;
-      if (hasAward(ledger, key) || keys.includes(key)) continue;
-      keys.push(key);
-      xp += m.xp;
+      if (hasAward(ledger, key) || payouts.some((p) => p.key === key)) continue;
+      payouts.push({ key, xp: m.xp, label: `${m.days} days running` });
     }
   }
-  return { keys, xp };
+  return payouts;
 }
 
 // ---------------------------------------------------------------------------

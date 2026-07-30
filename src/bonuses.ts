@@ -1,4 +1,4 @@
-import type { AwardLedger, DayPlan, DisciplineId } from './types';
+import type { AwardLedger, AwardPayout, DayPlan, DisciplineId } from './types';
 import type { WeekReview } from './goals';
 import { addDays } from './utils/time';
 
@@ -41,30 +41,22 @@ export function noDeferKey(weekKey: string): string {
   return `nodefer:${weekKey}`;
 }
 
-export interface BonusAward {
-  keys: string[];
-  xp: number;
-  /** XP to credit to each discipline. */
-  disciplines: Partial<Record<DisciplineId, number>>;
-  /** For the toast. */
-  labels: string[];
-}
-
-const EMPTY: BonusAward = { keys: [], xp: 0, disciplines: {}, labels: [] };
-
-function collect(kinds: string[]): BonusAward {
-  if (kinds.length === 0) return EMPTY;
-  const disciplines: Partial<Record<DisciplineId, number>> = {};
-  let xp = 0;
-  const labels: string[] = [];
+/**
+ * Each bonus carries its own XP, discipline and label.
+ *
+ * Previously a list of keys beside one summed figure and one merged discipline map,
+ * which meant the caller could only pay all of it or none of it. Both bonuses here are
+ * raised by the same act, so "one is new and one is not" is an ordinary state — and the
+ * summed form paid for both.
+ */
+function collect(kinds: string[]): AwardPayout[] {
+  const payouts: AwardPayout[] = [];
   for (const kind of kinds) {
     const spec = BONUSES[kind.split(':')[0]];
     if (!spec) continue;
-    xp += spec.xp;
-    disciplines[spec.discipline] = (disciplines[spec.discipline] ?? 0) + spec.xp;
-    labels.push(spec.label);
+    payouts.push({ key: kind, xp: spec.xp, discipline: spec.discipline, label: spec.label });
   }
-  return { keys: kinds, xp, disciplines, labels };
+  return payouts;
 }
 
 /**
@@ -80,12 +72,12 @@ export function planAheadDue(
   ledger: AwardLedger,
   plans: Record<string, DayPlan>,
   today: string
-): BonusAward {
+): AwardPayout[] {
   const tomorrow = addDays(today, 1);
   const blocks = plans[tomorrow]?.blocks ?? [];
-  if (!blocks.some((b) => !b.auto)) return EMPTY;
+  if (!blocks.some((b) => !b.auto)) return [];
   const key = planAheadKey(tomorrow);
-  if (ledger.granted.includes(key)) return EMPTY;
+  if (ledger.granted.includes(key)) return [];
   return collect([key]);
 }
 
@@ -105,16 +97,16 @@ export function reviewAwardsDue(
   weekKey: string,
   currentWeek: string,
   review: WeekReview
-): BonusAward {
+): AwardPayout[] {
   // Only a finished week can be reviewed. Reading the week you are still in is not
   // reflection, it is just looking at today with extra steps.
-  if (weekKey >= currentWeek) return EMPTY;
+  if (weekKey >= currentWeek) return [];
 
   // And only a week that holds something. Without this the bonus is farmable: step
   // back through a year of blank weeks and collect fifty XP apiece for reading
   // nothing. A week with no goals and no time recorded has nothing to reflect on.
   const hasSubstance = review.goals.length > 0 || review.plannedMinutes > 0;
-  if (!hasSubstance) return EMPTY;
+  if (!hasSubstance) return [];
 
   const kinds: string[] = [];
   const read = reviewKey(weekKey);

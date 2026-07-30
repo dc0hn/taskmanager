@@ -62,7 +62,11 @@ function PixelMeter({
   // Animate the count, not a width, so cells light one after another.
   const [shown, setShown] = useState(lit);
   const shownRef = useRef(lit);
-  shownRef.current = shown;
+  // Declared before the stepper below, so it holds the committed count by the time the
+  // stepper reads it. Effects run in declaration order.
+  useEffect(() => {
+    shownRef.current = shown;
+  });
 
   useEffect(() => {
     if (reduced) {

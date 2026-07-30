@@ -5,6 +5,7 @@ import { isPaid, type Challenge, type Quest, type QuestKind } from '../quests';
 import BadgeGlyph from './pixel/BadgeGlyph';
 import PixelMeter from './pixel/PixelMeter';
 import PixelBurst from './pixel/PixelBurst';
+import Figure from './Figure';
 
 // ============================================================================
 // QuestBoard
@@ -206,7 +207,8 @@ function ChallengeTile({
           title={`${challenge.done} of ${challenge.total}`}
         />
         <div className="font-mono text-nano tnum text-bone-4 mt-1">
-          {challenge.done.toLocaleString()} / {challenge.total.toLocaleString()}
+          {/* The tally counts; the target does not. Only one of the two ever moves. */}
+          <Figure value={challenge.done} /> / {challenge.total.toLocaleString()}
         </div>
       </div>
     </div>

@@ -84,7 +84,12 @@ describe('day-mark definition round trip', () => {
 
   it('would fail to match the amber gig if sourceColor were lost', () => {
     // Proof the test above bites: pink is 62° from amber, well outside tolerance.
-    const stripped = DEFAULT_DAY_MARKS.map(({ sourceColor: _drop, ...d }) => d);
+    // Omit-by-rest: the discarded binding is the whole point, so it is named to say so.
+    const stripped = DEFAULT_DAY_MARKS.map((def) => {
+      const copy = { ...def };
+      delete copy.sourceColor;
+      return copy;
+    });
     expect(matchMark(SOURCE_AMBER, stripped)).toBeNull();
     // And a demonstration of why: display pink is nowhere near source amber.
     const pink = rgbToHsl({ r: 244, g: 114, b: 182 }).h;

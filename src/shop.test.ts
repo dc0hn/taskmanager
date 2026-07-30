@@ -15,6 +15,7 @@ import {
   MAX_FREEZE_SLOTS,
   newThisWeek,
   offersFor,
+  pruneBoostedDates,
   purchase,
   rerollsFor,
   spendBoost,
@@ -22,8 +23,16 @@ import {
   spendReroll,
   unequip,
   weekIndexOf,
+  type ShopState,
 } from './shop';
-import { emptyProgress, CYCLE_XP, xpToReachLevel } from './progress';
+import {
+  emptyProgress,
+  CYCLE_XP,
+  STAT_RETENTION_DAYS,
+  withinRetention,
+  xpToReachLevel,
+} from './progress';
+import { shiftDay } from './streaks';
 import type { UserProgress } from './types';
 
 const WEEK = '2026-07-27';
@@ -315,6 +324,43 @@ describe('consumables', () => {
     const stocked = { ...emptyShop(), stock: { 'boost-day': 1 } };
     const r = spendBoost(stocked, '2026-07-30');
     expect(r.shop.boostedDates).toContain('2026-07-30');
+  });
+
+  it('never drops a boosted day that reconciliation can still reach', () => {
+    // The bug this closes: the list kept only the last sixty dates, so buying the
+    // sixty-first boost un-boosted the oldest day. Reconciliation recomputes from
+    // blocks, so the next visit to that month took the doubled half of its XP back
+    // out of the lifetime total — a clawback months after the fact.
+    let shop: ShopState = {
+      ...emptyShop(),
+      stock: { 'boost-day': 70 },
+    };
+    const dates: string[] = [];
+    for (let i = 0; i < 70; i++) {
+      const date = shiftDay('2026-07-30', -i);
+      dates.push(date);
+      const r = spendBoost(shop, date);
+      expect(r.ok).toBe(true);
+      shop = r.shop;
+    }
+
+    // All seventy are still boosted, including the ones a count cap would have lost.
+    for (const date of dates) {
+      expect(isBoosted(shop, date)).toBe(true);
+      expect(boostFor(shop, date)).toBe(BOOST_MULTIPLIER);
+    }
+  });
+
+  it('forgets only boosted days past the reconciliation window', () => {
+    const today = '2026-07-30';
+    const recent = shiftDay(today, -STAT_RETENTION_DAYS + 1);
+    const ancient = shiftDay(today, -STAT_RETENTION_DAYS - 1);
+
+    const kept = pruneBoostedDates([ancient, recent, today], today);
+    expect(kept).toEqual([recent, today]);
+    // The dropped day is beyond retention, so it can never be reconciled again and
+    // its XP is already banked. Forgetting the boost costs nothing.
+    expect(withinRetention(ancient, today)).toBe(false);
   });
 
   it('spends a reroll against the week it was used on', () => {

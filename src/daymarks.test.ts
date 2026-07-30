@@ -15,6 +15,9 @@ import {
   orphanedMarks,
   rgbToHsl,
   rowsNeeded,
+  sampleSize,
+  MAX_SAMPLE_PIXELS,
+  MAX_SAMPLE_EDGE,
   setMark,
   gridCells,
   defaultFirstCell,
@@ -520,5 +523,48 @@ describe('hueCollisions', () => {
   it('has nothing to say about a single mark', () => {
     expect(hueCollisions([DEFS[0]])).toEqual([]);
     expect(hueCollisions([])).toEqual([]);
+  });
+});
+
+describe('sampleSize', () => {
+  it('leaves a real screenshot untouched', () => {
+    // A 5K retina grab is 14.7 Mpx and is the largest thing anyone will actually paste.
+    // Scaling it would be a needless loss of precision.
+    expect(sampleSize(5120, 2880)).toEqual({ w: 5120, h: 2880, scale: 1 });
+    expect(sampleSize(2560, 1440).scale).toBe(1);
+    expect(sampleSize(1440, 900).scale).toBe(1);
+  });
+
+  it('bounds a pathological image by area', () => {
+    // 20000 x 20000 asks getImageData for 1.6 GB in one allocation, which is a dead
+    // webview rather than an error message.
+    const s = sampleSize(20000, 20000);
+    expect(s.w * s.h).toBeLessThanOrEqual(MAX_SAMPLE_PIXELS);
+    expect(s.scale).toBeLessThan(1);
+  });
+
+  it('bounds a long thin image by its edge', () => {
+    // Small enough in area to pass the pixel cap, but wider than engines will allocate.
+    const s = sampleSize(60000, 100);
+    expect(s.w).toBeLessThanOrEqual(MAX_SAMPLE_EDGE);
+    expect(s.h).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps the aspect ratio when it scales', () => {
+    const s = sampleSize(20000, 10000);
+    expect(s.w / s.h).toBeCloseTo(2, 1);
+  });
+
+  it('never returns a zero dimension for a real image', () => {
+    // A floor of one matters: a stride of zero would make every pixel read out of bounds.
+    const s = sampleSize(40000, 3);
+    expect(s.w).toBeGreaterThanOrEqual(1);
+    expect(s.h).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reports nothing to sample for a degenerate image', () => {
+    expect(sampleSize(0, 0)).toEqual({ w: 0, h: 0, scale: 1 });
+    expect(sampleSize(-5, 10)).toEqual({ w: 0, h: 0, scale: 1 });
+    expect(sampleSize(NaN, 10)).toEqual({ w: 0, h: 0, scale: 1 });
   });
 });

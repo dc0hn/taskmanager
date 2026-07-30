@@ -1,4 +1,5 @@
-import { useReducedMotion } from 'framer-motion';
+import { animate, useMotionValue, useReducedMotion } from 'framer-motion';
+import { useLayoutEffect, useRef } from 'react';
 import type { Transition, Variants } from 'framer-motion';
 
 // ============================================================================
@@ -190,6 +191,61 @@ export function useModalMotion() {
 /** Whether to run decorative/ambient animation at all. */
 export function useAmbient(): boolean {
   return !useReducedMotion();
+}
+
+/**
+ * A figure that counts to its new value.
+ *
+ * The whole app is about one number going up, and until now that number arrived without
+ * arriving — fifteen `toLocaleString()` sites, every one of them a teleport. This is the
+ * house counter, so a total, a balance and a quest tally all move the same way.
+ *
+ * Writes `textContent` directly instead of driving state. Re-rendering the tree for each
+ * frame of a 320ms tween is the one reliable way to make a counter cost more than it is
+ * worth, and none of the surrounding layout depends on the intermediate values.
+ *
+ * `useLayoutEffect` rather than `useEffect` so the figure is in the node before the
+ * browser paints. With an empty span and a passive effect there is a frame where the
+ * number is simply missing, which reads as a flash of broken layout.
+ *
+ * Counting DOWN is free and wanted: un-ticking a block returns XP, and a total that
+ * silently drops is the one case where the movement is the only thing explaining why.
+ *
+ * Pair it with the `tnum` class. Proportional digits change width as they roll, so an
+ * un-tabular counter jitters the layout around it for the whole tween.
+ */
+export function useCountUp(value: number, duration: number = DUR.slow) {
+  const reduced = useReducedMotion();
+  const ref = useRef<HTMLSpanElement>(null);
+  const mv = useMotionValue(value);
+  const previous = useRef(value);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const from = previous.current;
+    previous.current = value;
+
+    // First paint, no change, and reduced motion all land on the figure immediately.
+    if (reduced || from === value || !Number.isFinite(value)) {
+      node.textContent = Number.isFinite(value) ? value.toLocaleString() : '0';
+      return;
+    }
+
+    mv.set(from);
+    const controls = animate(mv, value, {
+      duration,
+      ease: EASE_OUT,
+      onUpdate: (v) => {
+        node.textContent = Math.round(v).toLocaleString();
+      },
+    });
+    // Stopping on unmount matters: the callback holds the node, and a tween still
+    // running against a detached node is a leak for as long as it lasts.
+    return () => controls.stop();
+  }, [value, reduced, mv, duration]);
+
+  return ref;
 }
 
 /**

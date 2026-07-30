@@ -1,7 +1,10 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { ShopKind, ShopState, Offer, Unavailable } from '../shop';
-import { equippedValue, itemById, newThisWeek } from '../shop';
+import { itemById, newThisWeek } from '../shop';
+import { motion, useReducedMotion } from 'framer-motion';
+import { DUR } from '../utils/motion';
 import BadgeGlyph from './pixel/BadgeGlyph';
+import Figure from './Figure';
 
 // ============================================================================
 // ShopPanel
@@ -76,6 +79,24 @@ function ShopPanel({
     [weekKey, previousWeekKey]
   );
 
+  /**
+   * True for a moment after the balance changes.
+   *
+   * Keyed on the balance rather than on a purchase callback, because brass also arrives
+   * from completing work and being paid a bonus — the balance moving is the fact worth
+   * marking, not one particular route to it.
+   */
+  const reduced = useReducedMotion() ?? false;
+  const [flash, setFlash] = useState(false);
+  const previousBrass = useRef(brass);
+  useEffect(() => {
+    if (previousBrass.current === brass) return;
+    previousBrass.current = brass;
+    setFlash(true);
+    const id = window.setTimeout(() => setFlash(false), 220);
+    return () => window.clearTimeout(id);
+  }, [brass]);
+
   const grouped = useMemo(() => {
     const out: Record<ShopKind, Offer[]> = { cosmetic: [], utility: [], quest: [], booster: [] };
     for (const o of offers) out[o.item.kind].push(o);
@@ -103,15 +124,27 @@ function ShopPanel({
             }}
             aria-hidden
           />
-          <span
+          {/*
+            The balance flashes when it moves, then counts to its new figure.
+
+            A purchase used to be a toast and a silently different number — the one moment
+            in the shop where something is actually spent, and nothing on the balance said
+            so. The flash marks that it changed; the count says by how much.
+          */}
+          <motion.span
             className="font-mono tnum"
-            style={{ fontSize: 20, fontWeight: 700, color: 'var(--bone-0)' }}
+            style={{ fontSize: 20, fontWeight: 700 }}
+            initial={false}
+            animate={{ color: flash ? 'var(--signal)' : 'var(--bone-0)' }}
+            transition={
+              reduced ? { duration: 0 } : { duration: flash ? DUR.instant : DUR.slow }
+            }
           >
-            {brass.toLocaleString()}
-          </span>
+            <Figure value={brass} />
+          </motion.span>
         </span>
         <span className="font-mono text-nano tnum text-bone-3">
-          {spent.toLocaleString()} spent all told
+          <Figure value={spent} /> spent all told
         </span>
         {fresh.length > 0 && (
           <span
@@ -312,5 +345,4 @@ function ShopTile({
   );
 }
 
-export { equippedValue };
 export default memo(ShopPanel);

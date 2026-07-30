@@ -171,6 +171,48 @@ export function cellRect(
  */
 export const MIN_MARK_FRACTION = 0.02;
 
+/**
+ * Ceiling on the pixels read from a pasted image.
+ *
+ * `getImageData` materialises four bytes per pixel in one allocation, and the canvas was
+ * created at the image's natural size — so the cost of a paste was set by whatever
+ * happened to be on the clipboard. A 20000 × 20000 image asks for 1.6 GB in a single
+ * request, which is a hang or a dead webview rather than an error message.
+ *
+ * 16 million pixels is 64 MB, and leaves a 5K retina screenshot (14.7 Mpx) untouched, so
+ * in practice nothing real is ever scaled. Downscaling is harmless here even when it does
+ * happen: the sampler wants the dominant hue of a cell, which survives resampling far
+ * better than it survives a crash.
+ */
+export const MAX_SAMPLE_PIXELS = 16_000_000;
+
+/** Canvas dimension limits vary by engine; well under all of them. */
+export const MAX_SAMPLE_EDGE = 8192;
+
+/**
+ * The size to sample a `w × h` image at, bounded on both area and longest edge.
+ *
+ * The frame is stored normalised 0..1, so scaling the sampling surface needs no
+ * conversion anywhere else — cell rectangles are computed against whatever size comes
+ * back from here.
+ */
+export function sampleSize(
+  w: number,
+  h: number
+): { w: number; h: number; scale: number } {
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+    return { w: 0, h: 0, scale: 1 };
+  }
+  const byEdge = Math.min(1, MAX_SAMPLE_EDGE / Math.max(w, h));
+  const byArea = Math.min(1, Math.sqrt(MAX_SAMPLE_PIXELS / (w * h)));
+  const scale = Math.min(byEdge, byArea);
+  return {
+    w: Math.max(1, Math.floor(w * scale)),
+    h: Math.max(1, Math.floor(h * scale)),
+    scale,
+  };
+}
+
 export interface MarkSample {
   rgb: Rgb;
   /** Share of sampled pixels that carried colour at all. */

@@ -4,7 +4,7 @@ import { Check, Pencil, Pin, PinOff } from 'lucide-react';
 import type { Block, CategoryDef, DayPlan } from '../types';
 import { categoryColors, resolveCategory } from '../utils/color';
 import { format12h, formatHourLabel, toDateKey } from '../utils/time';
-import { DUR, SPRING_SETTLE } from '../utils/motion';
+import { DUR, EASE_OUT, SPRING_SETTLE } from '../utils/motion';
 import { reflowInsert, reflowPlace } from '../reflow';
 import { fromDateKey } from '../utils/time';
 
@@ -68,17 +68,32 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+/** How often the now-line resamples the clock. The tween below bridges exactly this. */
+const NOW_TICK_SECONDS = 30;
+
+/**
+ * Minutes since midnight, FRACTIONAL.
+ *
+ * The seconds matter, and their absence was the bug behind the hopping line. This used to
+ * read `getMinutes()` only, so despite a 30-second interval the value changed just once a
+ * minute — and at an arbitrary point up to 30 seconds after the minute actually turned.
+ * The line jumped a whole minute of pixels at an unpredictable moment.
+ *
+ * Sampling with seconds makes each tick land on the true position, so a linear tween of
+ * exactly one tick arrives precisely as the next sample is taken. The result is
+ * continuous rather than stepped, with no drift to accumulate.
+ *
+ * Callers wanting a clock face should floor it; the fraction is for geometry.
+ */
 function useNowMinutes(active: boolean) {
-  const [now, setNow] = useState(() => {
+  const read = () => {
     const d = new Date();
-    return d.getHours() * 60 + d.getMinutes();
-  });
+    return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60;
+  };
+  const [now, setNow] = useState(read);
   useEffect(() => {
     if (!active) return;
-    const id = setInterval(() => {
-      const d = new Date();
-      setNow(d.getHours() * 60 + d.getMinutes());
-    }, 30 * 1000);
+    const id = setInterval(() => setNow(read()), NOW_TICK_SECONDS * 1000);
     return () => clearInterval(id);
   }, [active]);
   return now;
@@ -105,6 +120,7 @@ function TimeGrid({
   const today = toDateKey(new Date());
   const showsToday = dates.includes(today);
   const nowMin = useNowMinutes(showsToday);
+  const reduced = useReducedMotion() ?? false;
 
   // The visible window stretches to cover the working hours *and* anything
   // scheduled outside them, so a 6am block is never unreachable.
@@ -191,7 +207,13 @@ function TimeGrid({
    * drag, which is fixed for its whole duration.
    */
   const dragRef = useRef<DragState | null>(null);
-  dragRef.current = drag;
+  // Synced after commit rather than during render. The window handlers below read this
+  // during a pointer event, which is always well after a commit, so nothing here needs
+  // the value a render-time write would provide — and a render-time write survives a
+  // render React discards, which would leave the ref describing a drag that never was.
+  useEffect(() => {
+    dragRef.current = drag;
+  });
 
   const dragId = drag ? `${drag.date}:${drag.id}:${drag.mode}` : null;
 
@@ -202,8 +224,10 @@ function TimeGrid({
       const d = dragRef.current;
       if (!d || !gridRef.current) return;
       const dyMin = yToMinutes(e.clientY) - d.pointerStartY;
-      let nextStart = d.origStart;
-      let nextEnd = d.origEnd;
+      // Declared without initialisers: every branch below assigns both, so seeding them
+      // with the originals was dead code that read like a default.
+      let nextStart: number;
+      let nextEnd: number;
 
       if (d.mode === 'move') {
         const len = d.origEnd - d.origStart;
@@ -427,9 +451,23 @@ function TimeGrid({
 
               {/* now-line, only on today's column */}
               {isToday && nowMin >= visibleStart && nowMin <= visibleEnd && (
-                <div
+                <motion.div
+                  // Keyed on the window, so a recalculation of visible hours SNAPS to the
+                  // new position instead of gliding thirty seconds across the grid.
+                  key={visibleStart}
                   className="absolute left-0 right-0 pointer-events-none z-20 flex items-center"
-                  style={{ top: (nowMin - visibleStart) * PX_PER_MIN + PAD_TOP + 'px' }}
+                  style={{ top: PAD_TOP }}
+                  // The load-bearing prop. Without it the line sweeps down from the top of
+                  // the grid every time you navigate back to today, which reads as the
+                  // whole day replaying.
+                  initial={false}
+                  animate={{ y: (nowMin - visibleStart) * PX_PER_MIN }}
+                  // Linear, and exactly one tick long: the tween finishes as the next
+                  // sample lands, so the line moves at the speed time does. `y` rather
+                  // than `top` keeps it on the transform path with everything else here.
+                  transition={
+                    reduced ? { duration: 0 } : { duration: NOW_TICK_SECONDS, ease: 'linear' }
+                  }
                 >
                   <span className="relative flex items-center justify-center w-2 h-2 -ml-1">
                     <span className="absolute inset-0 rounded-full bg-now animate-nowPulse" />
@@ -449,7 +487,7 @@ function TimeGrid({
                       backgroundSize: '6px 1px',
                     }}
                   />
-                </div>
+                </motion.div>
               )}
             </div>
           );
@@ -458,19 +496,29 @@ function TimeGrid({
 
         {/* now-time label, pinned in the axis gutter */}
         {showsToday && nowMin >= visibleStart && nowMin <= visibleEnd && (
-          <span
+          <motion.span
+            key={visibleStart}
             className="absolute font-mono text-[10px] tnum tracking-wider z-30 px-1 rounded"
             style={{
-              top: (nowMin - visibleStart) * PX_PER_MIN + PAD_TOP - 7 + 'px',
+              top: PAD_TOP - 7,
               left: 0,
               width: AXIS_W - 8,
               textAlign: 'right',
               color: 'var(--signal)',
               background: 'var(--chassis-0)',
             }}
+            // Travels with the line, on the same curve and the same clock, or the two
+            // would visibly disagree about what time it is.
+            initial={false}
+            animate={{ y: (nowMin - visibleStart) * PX_PER_MIN }}
+            transition={
+              reduced ? { duration: 0 } : { duration: NOW_TICK_SECONDS, ease: 'linear' }
+            }
           >
-            {format12h(nowMin)}
-          </span>
+            {/* Floored: the fraction is for geometry, and a clock face showing seconds
+                it never updates would be a lie. */}
+            {format12h(Math.floor(nowMin))}
+          </motion.span>
         )}
 
         {/* re-mount key so a rebuild replays the entry stagger */}
@@ -521,6 +569,46 @@ interface BlockCardProps {
   onEdit: () => void;
   onToggle: () => void;
   onTogglePin: () => void;
+}
+
+/**
+ * A title with a strikethrough that can be animated.
+ *
+ * `text-decoration` is not an animatable property, so completing a block used to give
+ * half a reward: the opacity faded over 180ms while the line and the colour change
+ * snapped. That gesture is the most-repeated one in the app, and half of its feedback was
+ * arriving instantly and half over a fifth of a second.
+ *
+ * So the line is a real element, scaled from its left origin — a transform, which costs
+ * nothing and can be tweened. `currentColor` keeps it tied to whatever the title is
+ * already doing, including the recede to --bone-3.
+ *
+ * `initial={false}` is the detail that matters. Without it, every already-completed block
+ * redraws its line each time you navigate back to that day, turning a one-off reward into
+ * a tic that fires on every date change.
+ */
+function Struck({
+  done,
+  reduced,
+  children,
+}: {
+  done: boolean;
+  reduced: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="relative inline-block max-w-full truncate align-bottom">
+      {children}
+      <motion.span
+        aria-hidden
+        className="absolute left-0 w-full origin-left pointer-events-none"
+        style={{ top: '54%', height: 1, background: 'currentColor' }}
+        initial={false}
+        animate={{ scaleX: done ? 1 : 0 }}
+        transition={reduced ? { duration: 0 } : { duration: DUR.fast, ease: EASE_OUT }}
+      />
+    </span>
+  );
 }
 
 function BlockCard({
@@ -703,10 +791,11 @@ function BlockCard({
                 // --bone-3 rather than --bone-4: a completed block should recede,
                 // but its title still has to be readable at a glance.
                 color: done ? 'var(--bone-3)' : c.text,
-                textDecoration: done ? 'line-through' : undefined,
               }}
             >
-              {block.title}
+              <Struck done={done} reduced={reduced}>
+                {block.title}
+              </Struck>
             </span>
           </div>
         ) : (
@@ -728,11 +817,11 @@ function BlockCard({
                 // --fg-3 rather than --fg-4: a completed block should recede,
                 // but its title still has to be readable at a glance.
                 color: done ? 'var(--bone-3)' : c.text,
-                textDecoration: done ? 'line-through' : undefined,
-                textDecorationThickness: '1px',
               }}
             >
-              {block.title}
+              <Struck done={done} reduced={reduced}>
+                {block.title}
+              </Struck>
             </div>
             <div
               className="font-mono text-[10px] mt-0.5 tnum tracking-wide truncate"
