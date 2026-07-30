@@ -447,3 +447,43 @@ describe('staking brass', () => {
     expect(progressionReducer(state(), { type: 'BrassStaked', stake: 0 }).changed).toBe(false);
   });
 });
+
+describe('a purchase is announced', () => {
+  const rich = () =>
+    state({ progress: { ...emptyProgress(), startedOn: TODAY, brass: 9999, totalXp: 100 } });
+
+  it('reports that it happened, so the caller can sound it', () => {
+    // Converting the buy handler to a dispatch silently dropped the purchase sound and the
+    // toast naming the item. Neither was expressible through state alone, and nothing
+    // failed — which is exactly why the fact is carried explicitly now.
+    const r = progressionReducer(rich(), {
+      type: 'Purchased',
+      itemId: 'meter-brass',
+      weekKey: '2026-07-27',
+    });
+    expect(r.purchased).toBe(true);
+    expect(r.notes?.[0]).toMatch(/Brass meter/);
+    expect(r.notes?.[0]).toMatch(/brass\.$/);
+  });
+
+  it('says nothing of the sort when the purchase was refused', () => {
+    const broke = state({ progress: { ...emptyProgress(), startedOn: TODAY, brass: 0 } });
+    const r = progressionReducer(broke, {
+      type: 'Purchased',
+      itemId: 'meter-brass',
+      weekKey: '2026-07-27',
+    });
+    expect(r.purchased).toBeFalsy();
+  });
+
+  it('clears on drain, so the sound plays once', () => {
+    let store = progressionStore(initStore(rich()), {
+      type: 'Purchased',
+      itemId: 'meter-brass',
+      weekKey: '2026-07-27',
+    });
+    expect(store.purchased).toBe(true);
+    store = progressionStore(store, { type: 'Drained' });
+    expect(store.purchased).toBe(false);
+  });
+});

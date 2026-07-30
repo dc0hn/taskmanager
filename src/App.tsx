@@ -184,6 +184,7 @@ import {
   sfxDayCleared,
   sfxLevel,
   sfxMilestone,
+  sfxSpend,
   sfxPrestige,
 } from './utils/sfx';
 import MonthsView from './components/MonthsView';
@@ -219,7 +220,14 @@ import {
   reconcileCompletions,
   taskFromTemplate,
 } from './recurrence';
-import { addDays, formatDuration, minutesTo24h, parse24h, toDateKey } from './utils/time';
+import {
+  addDays,
+  daysBetween,
+  formatDuration,
+  minutesTo24h,
+  parse24h,
+  toDateKey,
+} from './utils/time';
 import { uid } from './utils/id';
 import { effectiveStart } from './utils/planning';
 import { useModalMotion, useViewMotion } from './utils/motion';
@@ -246,11 +254,7 @@ function minutesSinceMidnightOf(dayKey: string): number {
   const todayKey = toDateKey(now);
   const wallMinutes = now.getHours() * 60 + now.getMinutes();
   if (dayKey === todayKey) return wallMinutes;
-  const [y1, m1, d1] = dayKey.split('-').map(Number);
-  const [y2, m2, d2] = todayKey.split('-').map(Number);
-  const dayDiff = Math.round(
-    (Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000
-  );
+  const dayDiff = daysBetween(dayKey, todayKey);
   // Ticking a *future* day's block clamps to its own end-of-day rather than going
   // negative, which would read as absurdly early.
   return dayDiff > 0 ? dayDiff * 1440 + wallMinutes : wallMinutes;
@@ -360,8 +364,8 @@ export default function App() {
    * The only latest-value mirror left.
    *
    * There were six. Five held progression state that a dozen effects read while also
-   * writing — the arrangement that cost the ledger lost update, and the reason `grantOnce`
-   * had to advance a ref mid-flush. The store replaced them: it returns an identical object
+   * writing — the arrangement that cost the ledger lost update, and the reason granting once
+   * needed a ref advanced mid-flush. The store replaced them: it returns an identical object
    * when a dispatch changes nothing, so an effect can depend on the state it dispatches
    * against and still settle after one pass.
    *
@@ -545,7 +549,15 @@ export default function App() {
    * because the store returns an identical object when nothing changed, one pass settles.
    */
   useEffect(() => {
-    if (store.outbox.length === 0 && store.notes.length === 0 && store.notice == null) return;
+    if (
+      store.outbox.length === 0 &&
+      store.notes.length === 0 &&
+      store.notice == null &&
+      !store.purchased
+    ) {
+      return;
+    }
+    if (store.purchased) sfxSpend();
 
     for (const moment of store.outbox) {
       if (moment.kind === 'takeover') {
@@ -565,7 +577,7 @@ export default function App() {
     if (line) setToast(line);
 
     dispatch({ type: 'Drained' });
-  }, [store.outbox, store.notes, store.notice, pushReward]);
+  }, [store.outbox, store.notes, store.notice, store.purchased, pushReward]);
   const [sfxOn, setSfxOn] = useState(false);
 
   const rules = useMemo(() => rulesFor(categories), [categories]);
@@ -584,6 +596,9 @@ export default function App() {
     // `weekEpoch` is the whole point here: this reads sealed week records out of storage,
     // which is not reactive, so without it a character sealed on Monday would never reach
     // the value. eslint cannot see through `loadWeek`, so it calls the dep unnecessary.
+    // These read records out of storage, which is not reactive, so the deps eslint calls
+    // unnecessary are the only thing that invalidates them. It cannot see through the
+    // `load*` calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [weekEpoch, todayKey]
   );
@@ -870,8 +885,7 @@ export default function App() {
     }
 
     if (result.changed || issued) setWeek(loadWeek(weekKey));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayKey]);
+  }, [awards.granted, weekKey, todayKey]);
 
   // Swap the loaded week record when the displayed week changes.
   useEffect(() => {
@@ -924,6 +938,9 @@ export default function App() {
     // `weekEpoch` is the whole point here: this reads sealed week records out of storage,
     // which is not reactive, so without it a character sealed on Monday would never reach
     // the value. eslint cannot see through `loadWeek`, so it calls the dep unnecessary.
+    // These read records out of storage, which is not reactive, so the deps eslint calls
+    // unnecessary are the only thing that invalidates them. It cannot see through the
+    // `load*` calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authoritativeDates, shop, weekEpoch]);
 
@@ -954,8 +971,7 @@ export default function App() {
     if (JSON.stringify(completions) !== JSON.stringify(habits.completions)) {
       setHabits((prev) => ({ ...prev, completions }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plans, authoritativeDates, habits.completions]);
+  }, [todayKey, plans, authoritativeDates, habits.completions]);
 
   // -------------------------------------------------------------------------
   // Progression
@@ -1027,6 +1043,9 @@ export default function App() {
       modifiers,
       today: todayKey,
     });
+    // `plans` and everything derived from it are deliberately absent. `dayFingerprint` is a
+    // cheap signature of exactly the days that matter, and it exists so an unrelated
+    // re-render does not re-walk 42 days — depending on `plans` here would undo that.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayFingerprint, categories, shop, todayKey]);
 
@@ -1045,8 +1064,8 @@ export default function App() {
   /**
    * Offer one-off awards to the ledger.
    *
-   * What used to be `grantOnce`, and it is now three lines rather than twenty because the
-   * hard part moved. Several producers can offer in the same commit — one completion can
+   * Three lines rather than the twenty this used to take, because the hard part moved into
+   * the reducer. Several producers can offer in the same commit — one completion can
    * finish a quest, unlock a badge and keep the run at once — and each dispatch is applied
    * to the state the last one produced, in order. The mutable ref that used to make that
    * work mid-flush is gone, along with the class of bug it existed to paper over.
@@ -1099,8 +1118,7 @@ export default function App() {
       undefined,
       undefined
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [habits, todayKey, awards]);
+  }, [offerAwards, habits, todayKey, awards]);
 
   /**
    * Pay a habit bonus, once.
@@ -1168,8 +1186,7 @@ export default function App() {
       if (def) moments[p.key] = { kind: 'badge', def };
     }
     offerAwards(due, moments);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayStats, streak, dayMarks, todayKey, categories, progress, awards]);
+  }, [offerAwards, dayStats, streak, dayMarks, todayKey, categories, progress, awards]);
 
   /**
    * Fire once when today crosses the threshold.
@@ -1264,6 +1281,9 @@ export default function App() {
     }
     return rows;
     // `week` is a dependency so ticking a block re-reads the month in progress.
+    // These read records out of storage, which is not reactive, so the deps eslint calls
+    // unnecessary are the only thing that invalidates them. It cannot see through the
+    // `load*` calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [week, carryover, nav, dayMarks]);
 
@@ -1275,6 +1295,9 @@ export default function App() {
       out[g.goalId] = { ratio: g.ratio, done: g.done, target: g.monthlyTarget };
     }
     return out;
+    // These read records out of storage, which is not reactive, so the deps eslint calls
+    // unnecessary are the only thing that invalidates them. It cannot see through the
+    // `load*` calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [week]);
 
@@ -1622,8 +1645,7 @@ export default function App() {
         ])
       )
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chainContext]);
+  }, [awards, offerAwards, progress.startedOn, chainContext]);
 
   /**
    * Unseal codex cards whose data requirement is met.
@@ -1651,8 +1673,7 @@ export default function App() {
       }
     }
     offerAwards(due, moments);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nav, insightContext, awards]);
+  }, [offerAwards, progress.startedOn, nav, insightContext, awards]);
 
   const shopOffers = useMemo(
     () => offersFor(shop, progress, weekKey),
@@ -1768,8 +1789,7 @@ export default function App() {
         ])
       )
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quests, daily, weekly, weekKey, awards, progress.startedOn]);
+  }, [offerAwards, quests, daily, weekly, weekKey, awards, progress.startedOn]);
 
   const badges = useMemo(
     () =>

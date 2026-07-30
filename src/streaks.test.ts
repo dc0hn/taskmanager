@@ -371,8 +371,8 @@ describe('the award ledger', () => {
   });
 
   /**
-   * The reason `grantOnce` in App.tsx advances its ref instead of waiting for a
-   * render.
+   * Why the progression reducer sequences grants through one state rather than letting
+   * several callers each build a ledger from the same snapshot.
    *
    * A single completion can finish a quest, unlock a badge and keep the run in one
    * commit, and each of those pays through a separate effect. Every ledger returned
@@ -381,7 +381,9 @@ describe('the award ledger', () => {
    * whichever is stored last silently drops the other's keys. The XP was already
    * paid, so the dropped keys come due again on the next launch and get paid twice.
    *
-   * Grants must therefore chain: each one starts from the ledger the last produced.
+   * Grants must therefore chain: each one starts from the ledger the last produced. That is
+   * now structural — `progressionReducer` applies them in order to one state — rather than
+   * something a caller has to remember.
    */
   it('loses keys when two grants share one snapshot', () => {
     const base = emptyAwards();

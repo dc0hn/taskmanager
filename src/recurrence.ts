@@ -261,7 +261,3 @@ export function taskFromTemplate(template: RecurringTask): Task {
     templateId: template.id,
   };
 }
-
-export function emptyHabitStore(): HabitStore {
-  return { templates: [], completions: [] };
-}

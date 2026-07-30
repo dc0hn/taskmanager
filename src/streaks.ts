@@ -94,23 +94,20 @@ export function emptyAwards(): AwardLedger {
 }
 
 // ---------------------------------------------------------------------------
-// Date arithmetic — UTC, so no DST boundary can round a day away
+// Date arithmetic
 // ---------------------------------------------------------------------------
 
-export function shiftDay(dateKey: string, days: number): string {
-  const [y, m, d] = dateKey.split('-').map(Number);
-  const t = Date.UTC(y, m - 1, d) + days * 86_400_000;
-  const out = new Date(t);
-  const mm = String(out.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(out.getUTCDate()).padStart(2, '0');
-  return `${out.getUTCFullYear()}-${mm}-${dd}`;
-}
+/**
+ * Re-exported, not reimplemented.
+ *
+ * These live in utils/time.ts now. The names stay here because a dozen modules import them
+ * from streaks, and because "shift a day" reads naturally beside a streak walk — but there
+ * is one implementation, and it is not this file's.
+ */
+export { addDays as shiftDay, daysBetween } from './utils/time';
 
-export function daysBetween(from: string, to: string): number {
-  const [y1, m1, d1] = from.split('-').map(Number);
-  const [y2, m2, d2] = to.split('-').map(Number);
-  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000);
-}
+// And imported for use inside this file.
+import { addDays as shiftDay, daysBetween } from './utils/time';
 
 // ---------------------------------------------------------------------------
 // Classifying a day
@@ -386,14 +383,6 @@ export function daysUntilFreeze(state: StreakState, today: string): number {
   return Math.max(0, FREEZE_REFILL_DAYS - daysBetween(state.refilledOn, today));
 }
 
-export const OUTCOME_LABEL: Record<DayOutcome, string> = {
-  advanced: 'kept',
-  held: 'held',
-  neutral: 'clear',
-  frozen: 'frozen',
-  reset: 'fresh start',
-  open: 'today',
-};
 
 /**
  * A sentence for the current state.

@@ -7,8 +7,17 @@ import { emptyAwards } from './streaks';
 import { characterById } from './characters';
 import { invalidatePlanDates, listPlanDates, loadPlans, savePlan } from './storage';
 
-// Throwaway measurement harness for the technical audit. Not a behavioural test —
-// it exists to put real numbers against the "recompute janks the UI" findings.
+// ============================================================================
+// Performance guards.
+//
+// Not behavioural tests. Each one puts a real number against a claim that would otherwise
+// be an assumption, and fails if a change makes the app slow rather than wrong — which is
+// the failure mode a test suite otherwise never catches.
+//
+// Two of these started as one-off measurements answering an audit's "this must be janking
+// the UI" findings. They were kept because the measurements dropped the findings, and a
+// number that dropped a finding is worth holding on to.
+// ============================================================================
 
 function shiftKey(key: string, days: number): string {
   const [y, m, d] = key.split('-').map(Number);

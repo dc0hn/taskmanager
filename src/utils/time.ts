@@ -10,24 +10,34 @@ export function fromDateKey(key: string): Date {
   return new Date(y, m - 1, d);
 }
 
+/**
+ * Shift a date key by whole days. UTC arithmetic, deliberately.
+ *
+ * THE ONE IMPLEMENTATION. There were five: this, `shiftDay` in streaks.ts, `shiftDateKey`
+ * in progress.ts, `weeksBack` in assay.ts and an inline copy in commissions.ts — and the
+ * first two disagreed on method, one walking local time and one UTC. They happen to agree
+ * for date keys, which is exactly what makes a pair like that dangerous: it works until the
+ * day it doesn't, and then only in one timezone.
+ *
+ * UTC because a date key is a label, not an instant. Local arithmetic across a DST boundary
+ * works on a 23-hour day and can land on the wrong label; `Date.UTC` days are always 86.4
+ * million milliseconds long.
+ */
 export function addDays(key: string, n: number): string {
-  const d = fromDateKey(key);
-  d.setDate(d.getDate() + n);
-  return toDateKey(d);
+  const [y, m, d] = key.split('-').map(Number);
+  const out = new Date(Date.UTC(y, m - 1, d) + n * 86_400_000);
+  const mm = String(out.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(out.getUTCDate()).padStart(2, '0');
+  return `${out.getUTCFullYear()}-${mm}-${dd}`;
 }
 
-export function formatLongDate(key: string): string {
-  const d = fromDateKey(key);
-  return d.toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  });
+/** Whole days from one date key to another. Negative when `to` is earlier. */
+export function daysBetween(from: string, to: string): number {
+  const [y1, m1, d1] = from.split('-').map(Number);
+  const [y2, m2, d2] = to.split('-').map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000);
 }
 
-export function isSameDay(a: string, b: string): boolean {
-  return a === b;
-}
 
 // "HH:MM" — 24h, used in inputs
 export function minutesTo24h(min: number): string {

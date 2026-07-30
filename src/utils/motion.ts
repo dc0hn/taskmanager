@@ -127,25 +127,6 @@ export function useViewMotion(direction: number) {
   };
 }
 
-/** Row/chip entrance inside a list, staggered by index. */
-export function useRowMotion(index: number) {
-  const reduced = useReducedMotion();
-  if (reduced) {
-    return {
-      initial: { opacity: 0 },
-      animate: { opacity: 1 },
-      exit: { opacity: 0 },
-      transition: { duration: DUR.fast },
-    };
-  }
-  return {
-    initial: { opacity: 0, y: -4 },
-    animate: { opacity: 1, y: 0 },
-    exit: { opacity: 0, x: 10 },
-    transition: { ...SPRING_SETTLE, delay: staggerDelay(index) },
-  };
-}
-
 /** Modal card: scales up a hair as it fades in, drops away quickly. */
 export function useModalMotion() {
   const reduced = useReducedMotion();
@@ -186,11 +167,6 @@ export function useModalMotion() {
       transition: SPRING_SETTLE,
     },
   };
-}
-
-/** Whether to run decorative/ambient animation at all. */
-export function useAmbient(): boolean {
-  return !useReducedMotion();
 }
 
 /**

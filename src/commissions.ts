@@ -1,4 +1,5 @@
 import type { Block, DayPlan } from './types';
+import { addDays } from './utils/time';
 
 // ============================================================================
 // Commissions — brass staked against a block you have not done yet
@@ -213,10 +214,7 @@ export function pruneCommissions(
   today: string,
   retentionDays = COMMISSION_RETENTION_DAYS
 ): Commission[] {
-  const [y, m, d] = today.split('-').map(Number);
-  const t = Date.UTC(y, m - 1, d) - retentionDays * 86_400_000;
-  const cutoff = new Date(t);
-  const cutoffKey = `${cutoff.getUTCFullYear()}-${String(cutoff.getUTCMonth() + 1).padStart(2, '0')}-${String(cutoff.getUTCDate()).padStart(2, '0')}`;
+  const cutoffKey = addDays(today, -retentionDays);
   // Open commissions are never pruned however old, because an unsettled promise is still
   // owed — and its stake has already left the balance.
   return commissions.filter((c) => c.outcome === 'open' || c.date >= cutoffKey);

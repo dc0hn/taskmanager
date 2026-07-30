@@ -8,6 +8,7 @@ import type {
   XpLine,
 } from './types';
 import { UNKNOWN_CATEGORY } from './types';
+import { addDays } from './utils/time';
 
 // ============================================================================
 // Progression — XP, levels, ranks, brass
@@ -732,7 +733,7 @@ export function weekdayMedians(
   for (const date of dates) {
     const samples: number[] = [];
     for (let w = 1; w <= weeks; w++) {
-      const past = shiftDateKey(date, -7 * w);
+      const past = addDays(date, -7 * w);
       const stat = stats[past];
       // Only days that had a plan. A day with nothing booked scored zero for a reason that
       // has nothing to do with how the weekday usually goes.
@@ -769,7 +770,7 @@ export function withinRetention(
   today: string,
   retentionDays = STAT_RETENTION_DAYS
 ): boolean {
-  return date >= shiftDateKey(today, -retentionDays) && date <= shiftDateKey(today, 1);
+  return date >= addDays(today, -retentionDays) && date <= addDays(today, 1);
 }
 
 /**
@@ -796,21 +797,12 @@ export function pruneStats(
 ): Record<string, DailyStat> {
   const dates = Object.keys(stats).sort();
   if (dates.length === 0) return stats;
-  const cutoff = shiftDateKey(today, -retentionDays);
+  const cutoff = addDays(today, -retentionDays);
   const out: Record<string, DailyStat> = {};
   for (const d of dates) if (d >= cutoff) out[d] = stats[d];
   return Object.keys(out).length === dates.length ? stats : out;
 }
 
-/** UTC day arithmetic on a date key — no DST rounding, no Date stored. */
-function shiftDateKey(dateKey: string, days: number): string {
-  const [y, m, d] = dateKey.split('-').map(Number);
-  const t = Date.UTC(y, m - 1, d) + days * 86_400_000;
-  const out = new Date(t);
-  const mm = String(out.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(out.getUTCDate()).padStart(2, '0');
-  return `${out.getUTCFullYear()}-${mm}-${dd}`;
-}
 
 // ---------------------------------------------------------------------------
 // Aggregates for the Standing view
@@ -860,16 +852,4 @@ export function areaTotals(
     }
   }
   return { byCategory, byDiscipline };
-}
-
-export function xpEarnedBetween(
-  stats: Record<string, DailyStat>,
-  fromDate: string,
-  toDate: string
-): number {
-  let sum = 0;
-  for (const [date, stat] of Object.entries(stats)) {
-    if (date >= fromDate && date <= toDate) sum += stat.xpEarned;
-  }
-  return sum;
 }

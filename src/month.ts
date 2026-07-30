@@ -89,12 +89,6 @@ export function formatMonthKey(monthKey: string): string {
   });
 }
 
-/** "Jul" — for compact axes. */
-export function formatMonthShort(monthKey: string): string {
-  const { year, month } = monthYear(monthKey);
-  return new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: 'short' });
-}
-
 export function isDayInMonth(dateKey: string, monthKey: string): boolean {
   return toMonthKey(dateKey) === monthKey;
 }

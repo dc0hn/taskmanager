@@ -31,7 +31,7 @@ import {
   resolveStreak,
   emptyAwards,
 } from '../streaks';
-import { emptyShop, freezeCapacity, purchase, type ShopState } from '../shop';
+import { emptyShop, freezeCapacity, itemById, purchase, type ShopState } from '../shop';
 import { mergeDisciplines } from '../bonuses';
 import type { RewardMoment } from '../rewards';
 
@@ -56,8 +56,8 @@ import type { RewardMoment } from '../rewards';
 //
 //   THE LEDGER LOST UPDATE. Several effects granted in one commit, each building a whole
 //   new ledger from a ref React only refreshes on render, so the last write won and the
-//   others' keys vanished while their XP had already been paid. `grantOnce` solved that by
-//   advancing a mutable ref mid-flush. Here it cannot happen: granting is one function,
+//   others' keys vanished while their XP had already been paid. The fix at the time was a
+//   mutable ref advanced mid-flush. Here it cannot happen at all: granting is one function,
 //   applied to one state, in order. The ref disappears structurally rather than being
 //   managed.
 //
@@ -150,6 +150,15 @@ export interface ProgressionResult {
   changed: boolean;
   /** Set when something was refused, for the caller to surface. */
   message?: string;
+  /**
+   * A purchase went through.
+   *
+   * A fact about what happened rather than a presentation instruction — the caller decides
+   * that a purchase is worth a sound. Carried because converting the buy handler to a
+   * dispatch silently dropped both the sound and the toast: neither was expressible through
+   * state alone, and nothing failed to notice.
+   */
+  purchased?: boolean;
   /**
    * Narration — what happened, in words, for the toast line.
    *
@@ -390,6 +399,7 @@ export function progressionReducer(
 
       // Spend moves to `brassSpent` as well as off the balance, so lifetime earnings stay
       // derivable as `brass + brassSpent`.
+      const item = itemById(event.itemId);
       return {
         state: {
           ...state,
@@ -402,6 +412,8 @@ export function progressionReducer(
         },
         moments: [],
         changed: true,
+        purchased: true,
+        notes: [`${item?.name ?? 'Bought'} \u2014 ${result.spend.toLocaleString()} brass.`],
       };
     }
 
@@ -489,12 +501,14 @@ export interface ProgressionStore {
   notice: string | null;
   /** Narration produced and not yet shown. */
   notes: string[];
+  /** A purchase went through and has not been acknowledged. */
+  purchased: boolean;
 }
 
 export type StoreAction = ProgressionEvent | { type: 'Drained' };
 
 export function initStore(state: ProgressionState): ProgressionStore {
-  return { state, outbox: [], notice: null, notes: [] };
+  return { state, outbox: [], notice: null, notes: [], purchased: false };
 }
 
 export function progressionStore(
@@ -502,10 +516,15 @@ export function progressionStore(
   action: StoreAction
 ): ProgressionStore {
   if (action.type === 'Drained') {
-    if (store.outbox.length === 0 && store.notice == null && store.notes.length === 0) {
+    if (
+      store.outbox.length === 0 &&
+      store.notice == null &&
+      store.notes.length === 0 &&
+      !store.purchased
+    ) {
       return store;
     }
-    return { ...store, outbox: [], notice: null, notes: [] };
+    return { ...store, outbox: [], notice: null, notes: [], purchased: false };
   }
 
   const result = progressionReducer(store.state, action);
@@ -513,7 +532,8 @@ export function progressionStore(
     !result.changed &&
     result.moments.length === 0 &&
     result.message == null &&
-    (result.notes?.length ?? 0) === 0
+    (result.notes?.length ?? 0) === 0 &&
+    !result.purchased
   ) {
     // Same object, so a dependent effect does not re-run and nothing loops.
     return store;
@@ -523,5 +543,6 @@ export function progressionStore(
     outbox: [...store.outbox, ...result.moments],
     notice: result.message ?? store.notice,
     notes: [...store.notes, ...(result.notes ?? [])],
+    purchased: store.purchased || result.purchased === true,
   };
 }

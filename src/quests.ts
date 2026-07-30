@@ -164,7 +164,6 @@ export interface ProfileFacts {
   leastTouched: string | null;
 }
 
-export const NO_PROFILE: ProfileFacts = { strongestHour: null, leastTouched: null };
 
 /** Enough completions before an hour is worth calling anyone's strongest. */
 export const STRONGEST_HOUR_MIN = 12;

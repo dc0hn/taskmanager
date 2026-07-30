@@ -1,6 +1,7 @@
 import type { DailyStat } from './types';
 import { dayScore } from './progress';
 import { weekDates } from './week';
+import { addDays } from './utils/time';
 
 // ============================================================================
 // The assay — a weekly appraisal, paid in brass
@@ -66,16 +67,6 @@ function median(values: number[]): number {
   return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-/** The Monday `n` weeks before `weekKey`. */
-function weeksBack(weekKey: string, n: number): string {
-  const [y, m, d] = weekKey.split('-').map(Number);
-  const t = Date.UTC(y, m - 1, d) - n * 7 * 86_400_000;
-  const o = new Date(t);
-  return `${o.getUTCFullYear()}-${String(o.getUTCMonth() + 1).padStart(2, '0')}-${String(
-    o.getUTCDate()
-  ).padStart(2, '0')}`;
-}
-
 /**
  * Appraise a finished week.
  *
@@ -90,7 +81,7 @@ export function assay(
 
   const priors: number[] = [];
   for (let i = 1; i <= ASSAY_WINDOW_WEEKS; i++) {
-    const s = weekScore(stats, weeksBack(weekKey, i));
+    const s = weekScore(stats, addDays(weekKey, -7 * i));
     if (s != null) priors.push(s);
   }
 

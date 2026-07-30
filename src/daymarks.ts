@@ -450,22 +450,11 @@ export function markForDate(
   return markById(defs, marks[date]);
 }
 
-export function isMarked(marks: DayMarks, date: string): boolean {
-  return marks[date] != null;
-}
-
 /** Every month key that holds at least one mark, ascending. */
 export function monthsWithMarks(marks: DayMarks): string[] {
   const set = new Set<string>();
   for (const date of Object.keys(marks)) set.add(date.slice(0, 7));
   return [...set].sort();
-}
-
-/** Dates in a month that carry any mark, ascending. */
-export function markedDatesInMonth(marks: DayMarks, monthKey: string): string[] {
-  return Object.keys(marks)
-    .filter((d) => isDayInMonth(d, monthKey))
-    .sort();
 }
 
 /** Guard against a frame dragged to nothing. */
