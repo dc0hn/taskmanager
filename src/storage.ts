@@ -143,6 +143,7 @@ function normalizeBlock(r: unknown): Block | null {
     category: toCategoryId(b.category),
     completed: b.completed === true,
     auto: b.auto === true,
+    pinned: b.pinned === true,
     goalId: str(b.goalId) || undefined,
     templateId: str(b.templateId) || undefined,
   };

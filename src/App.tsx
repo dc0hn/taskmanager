@@ -47,6 +47,12 @@ import {
 } from './storage';
 import { buildSchedule, rulesFor } from './scheduler';
 import {
+  describeReflow,
+  reflowInsert,
+  reflowPlace,
+  reflowRemove,
+} from './reflow';
+import {
   buildWeekReview,
   dropFromCarryover,
   isSealed,
@@ -65,7 +71,7 @@ import {
   reconcileCompletions,
   taskFromTemplate,
 } from './recurrence';
-import { addDays, minutesTo24h, parse24h, toDateKey } from './utils/time';
+import { addDays, formatDuration, minutesTo24h, parse24h, toDateKey } from './utils/time';
 import { uid } from './utils/id';
 import { effectiveStart } from './utils/planning';
 import { useModalMotion, useViewMotion } from './utils/motion';
@@ -458,26 +464,90 @@ export default function App() {
   // -------------------------------------------------------------------------
   // Block actions — all keyed by date, because the week grid spans seven days
   // -------------------------------------------------------------------------
+  /**
+   * Change a block. When the change is geometric — a drag or a resize — the rest
+   * of the day reflows around it: what collides gets pushed down by the least
+   * amount that clears it, and the slot left behind closes up. Non-geometric
+   * edits (title, category, completion) just patch.
+   */
   const handleChangeBlock = useCallback(
     (day: string, id: string, patch: Partial<Block>) => {
+      const geometric = patch.start != null || patch.end != null;
+      if (!geometric) {
+        mutateDay(day, (p) => ({
+          ...p,
+          blocks: p.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+        }));
+        return;
+      }
+
+      const plan = plansRef.current[day];
+      const current = plan?.blocks.find((b) => b.id === id);
+      if (!plan || !current) return;
+
+      const start = patch.start ?? current.start;
+      const end = patch.end ?? current.end;
+      const outcome = reflowPlace(plan.blocks, id, start, end, settings.workingEnd);
+
+      if (!outcome.ok) {
+        if (outcome.message) setToast(outcome.message);
+        return;
+      }
+      // Any non-geometric fields in the same patch still need applying.
+      const rest = { ...patch };
+      delete rest.start;
+      delete rest.end;
       mutateDay(day, (p) => ({
         ...p,
-        blocks: p.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+        blocks: outcome.blocks.map((b) =>
+          b.id === id ? { ...b, ...rest } : b
+        ),
+      }));
+      const note = describeReflow(outcome, formatDuration);
+      if (note) setToast(note);
+    },
+    [mutateDay, settings.workingEnd]
+  );
+
+  const handleTogglePin = useCallback(
+    (day: string, id: string) => {
+      mutateDay(day, (p) => ({
+        ...p,
+        blocks: p.blocks.map((b) => (b.id === id ? { ...b, pinned: !b.pinned } : b)),
       }));
     },
     [mutateDay]
   );
 
-  /** Move a block between two days — the cross-column drag, and the modal's day field. */
+  /**
+   * Move a block between two days — the cross-column drag, and the modal's day
+   * field. Both ends reflow: the destination makes room, and the day it left
+   * closes the slot behind it.
+   */
   const handleMoveBlock = useCallback(
     (from: string, id: string, to: string, patch: Partial<Block>) => {
       const source = plansRef.current[from];
       const block = source?.blocks.find((b) => b.id === id);
-      if (!block) return;
-      mutateDay(from, (p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== id) }));
-      mutateDay(to, (p) => ({ ...p, blocks: [...p.blocks, { ...block, ...patch }] }));
+      if (!source || !block) return;
+
+      const incoming = { ...block, ...patch };
+      const destination = plansRef.current[to]?.blocks ?? [];
+      const landing = reflowInsert(destination, incoming, settings.workingEnd);
+      if (!landing.ok) {
+        if (landing.message) setToast(landing.message);
+        return;
+      }
+
+      // Only close the source once the destination has accepted it, so a refused
+      // move leaves both days untouched.
+      const vacated = reflowRemove(source.blocks, id, settings.workingEnd);
+      mutateDay(from, (p) => ({ ...p, blocks: vacated.blocks }));
+      mutateDay(to, (p) => ({ ...p, blocks: landing.blocks }));
+
+      const note = describeReflow(landing, formatDuration);
+      if (note) setToast(note);
     },
-    [mutateDay]
+    [mutateDay, settings.workingEnd]
   );
 
   const handleToggleComplete = useCallback(
@@ -508,21 +578,40 @@ export default function App() {
 
   const handleDeleteBlock = useCallback(
     (day: string, id: string) => {
-      mutateDay(day, (p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== id) }));
+      // Removing an entry closes the slot behind it, same as dragging one away.
+      mutateDay(day, (p) => ({
+        ...p,
+        blocks: reflowRemove(p.blocks, id, settings.workingEnd).blocks,
+      }));
       setEditing(null);
     },
-    [mutateDay]
+    [mutateDay, settings.workingEnd]
   );
 
   const handleCreateBlock = useCallback(
     (day: string, start: number) => {
       const end = Math.min(start + 30, 24 * 60);
-      const id = uid();
-      const block: Block = { id, title: 'New entry', start, end, category: categories[0]?.id ?? 'other' };
-      mutateDay(day, (p) => ({ ...p, blocks: [...p.blocks, block] }));
+      const block: Block = {
+        id: uid(),
+        title: 'New entry',
+        start,
+        end,
+        category: categories[0]?.id ?? 'other',
+      };
+      // Clicking an occupied hour now inserts and pushes down rather than doing
+      // nothing. Only pinned or completed work can refuse the slot.
+      const existing = plansRef.current[day]?.blocks ?? [];
+      const landing = reflowInsert(existing, block, settings.workingEnd);
+      if (!landing.ok) {
+        if (landing.message) setToast(landing.message);
+        return;
+      }
+      mutateDay(day, (p) => ({ ...p, blocks: landing.blocks }));
       setEditing({ date: day, block });
+      const note = describeReflow(landing, formatDuration);
+      if (note) setToast(note);
     },
-    [mutateDay, categories]
+    [mutateDay, categories, settings.workingEnd]
   );
 
   const handleEditBlock = useCallback(
@@ -829,6 +918,7 @@ export default function App() {
                     onEditBlock={handleEditBlock}
                     onCreateBlock={handleCreateBlock}
                     onToggleComplete={handleToggleComplete}
+                    onTogglePin={handleTogglePin}
                     onRefuse={setToast}
                     density="compact"
                   />
@@ -852,6 +942,7 @@ export default function App() {
                     onEditBlock={handleEditBlock}
                     onCreateBlock={handleCreateBlock}
                     onToggleComplete={handleToggleComplete}
+                    onTogglePin={handleTogglePin}
                     onRefuse={setToast}
                     density="comfortable"
                   />
@@ -940,7 +1031,6 @@ export default function App() {
 
       <EditBlockModal
         target={editing}
-        plans={plans}
         categories={categories}
         onClose={() => setEditing(null)}
         onSave={(day, id, patch, moveTo) => {

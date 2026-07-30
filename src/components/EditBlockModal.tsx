@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Trash2, X } from 'lucide-react';
-import type { Block, CategoryDef, DayPlan } from '../types';
+import { Pin, PinOff, Trash2, X } from 'lucide-react';
+import type { Block, CategoryDef } from '../types';
 import { colorsFor } from '../utils/color';
 import { minutesTo24h, parse24h } from '../utils/time';
 
@@ -23,8 +23,6 @@ export interface EditTarget {
 
 interface Props {
   target: EditTarget | null;
-  /** Every loaded day, so a move can be validated against its destination. */
-  plans: Record<string, DayPlan>;
   categories: CategoryDef[];
   onClose: () => void;
   onSave: (date: string, id: string, patch: Partial<Block>, moveTo?: string) => void;
@@ -33,7 +31,6 @@ interface Props {
 
 export default function EditBlockModal({
   target,
-  plans,
   categories,
   onClose,
   onSave,
@@ -44,6 +41,7 @@ export default function EditBlockModal({
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [category, setCategory] = useState('other');
+  const [pinned, setPinned] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,6 +51,7 @@ export default function EditBlockModal({
     setStart(minutesTo24h(target.block.start));
     setEnd(minutesTo24h(target.block.end));
     setCategory(target.block.category);
+    setPinned(target.block.pinned === true);
     setError(null);
   }, [target]);
 
@@ -81,26 +80,15 @@ export default function EditBlockModal({
       return;
     }
 
+    // No overlap check. Overlapping is no longer an error — the day reflows
+    // around the new times, and only pinned or completed work can refuse the
+    // slot, which App reports on the toast. Blocking here would reject a save
+    // that is now perfectly valid.
     const moving = date !== target.date;
-    // On a move, every block on the destination day counts; staying put, the
-    // block being edited is excluded from its own overlap check.
-    const rivals = (plans[date]?.blocks ?? []).filter(
-      (b) => moving || b.id !== target.block.id
-    );
-    const clash = rivals.find((b) => !(e <= b.start || s >= b.end));
-    if (clash) {
-      setError(
-        moving
-          ? `That slot is taken on the new day — “${clash.title}” is already there.`
-          : `Overlaps “${clash.title}”.`
-      );
-      return;
-    }
-
     onSave(
       target.date,
       target.block.id,
-      { title: title.trim() || 'Untitled', start: s, end: e, category },
+      { title: title.trim() || 'Untitled', start: s, end: e, category, pinned },
       moving ? date : undefined
     );
   }
@@ -223,6 +211,28 @@ export default function EditBlockModal({
                     );
                   })}
                 </div>
+              </div>
+
+              <div>
+                <Label>Fixed in place</Label>
+                <button
+                  onClick={() => setPinned((v) => !v)}
+                  aria-pressed={pinned}
+                  className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[11.5px] font-medium transition-all"
+                  style={{
+                    background: pinned ? 'var(--signal-dim)' : 'rgba(245,242,236,0.035)',
+                    border: `1px solid ${pinned ? 'var(--signal-line)' : 'var(--rule-2)'}`,
+                    color: pinned ? 'var(--signal)' : 'var(--bone-2)',
+                  }}
+                >
+                  {pinned ? <Pin size={12} strokeWidth={2.4} /> : <PinOff size={12} strokeWidth={1.8} />}
+                  {pinned ? 'Pinned' : 'Not pinned'}
+                </button>
+                <p className="text-[11px] text-bone-3 mt-1.5 leading-snug max-w-[46ch]">
+                  {pinned
+                    ? 'Rearranging other entries will move around this one instead of pushing it.'
+                    : 'Rearranging other entries can push this one later to make room.'}
+                </p>
               </div>
 
               <AnimatePresence>

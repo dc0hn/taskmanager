@@ -140,6 +140,17 @@ export interface Block {
   completed?: boolean;
   /** True for synthetic blocks the scheduler owns (auto-breaks, shutdown). */
   auto?: boolean;
+  /**
+   * Marks this as a fixed commitment: manual rearrangement routes around it
+   * rather than pushing it.
+   *
+   * A Task can say it has a `fixedTime`, but that information is consumed by the
+   * scheduler and does not survive onto the Block — so without this flag there is
+   * no way to tell a 2pm client call from an hour of flexible work once the day
+   * has been built. Pinning resists being *displaced*; it does not stop you
+   * dragging the block yourself.
+   */
+  pinned?: boolean;
   goalId?: string;
   templateId?: string;
 }

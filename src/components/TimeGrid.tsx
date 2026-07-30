@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, Pencil } from 'lucide-react';
+import { Check, Pencil, Pin, PinOff } from 'lucide-react';
 import type { Block, CategoryDef, DayPlan } from '../types';
 import { categoryColors, resolveCategory } from '../utils/color';
 import { format12h, formatHourLabel, toDateKey } from '../utils/time';
@@ -40,6 +40,7 @@ export interface TimeGridProps {
   onEditBlock: (date: string, id: string) => void;
   onCreateBlock: (date: string, start: number) => void;
   onToggleComplete: (date: string, id: string) => void;
+  onTogglePin: (date: string, id: string) => void;
   /** Called with a human-readable reason whenever an interaction is refused. */
   onRefuse: (message: string) => void;
   /** Day view gets richer blocks; week view compresses them. */
@@ -93,6 +94,7 @@ function TimeGrid({
   onEditBlock,
   onCreateBlock,
   onToggleComplete,
+  onTogglePin,
   onRefuse,
   density,
 }: TimeGridProps) {
@@ -181,25 +183,9 @@ function TimeGrid({
         return;
       }
 
-      // Conflict is checked against the *destination* day, excluding the block
-      // itself when it is not moving days.
-      const targetBlocks = (plans[targetDate]?.blocks ?? []).filter(
-        (b) => movedDay || b.id !== d.id
-      );
-      const clash = targetBlocks.find((b) => !(end <= b.start || start >= b.end));
-
-      if (clash) {
-        // Never spring back in silence — say what it hit, and where.
-        const where = movedDay
-          ? ` on ${fromDateKey(targetDate).toLocaleDateString(undefined, {
-              weekday: 'long',
-            })}`
-          : '';
-        onRefuse(`That overlaps “${clash.title}”${where}.`);
-        setDrag(null);
-        return;
-      }
-
+      // No overlap check here any more. The day makes room: App runs the reflow,
+      // which pushes what it must, closes the slot behind, and reports back if it
+      // was refused by pinned or completed work.
       if (movedDay) {
         onMoveBlock(d.date, d.id, targetDate, { start, end });
       } else {
@@ -249,17 +235,8 @@ function TimeGrid({
     if (!(e.target instanceof Element)) return;
     if (!e.target.classList.contains('col-bg')) return;
     if (!gridRef.current) return;
-
-    const start = snap(yToMinutes(e.clientY));
-    const end = Math.min(start + 30, 24 * 60);
-    const clash = (plans[date]?.blocks ?? []).find(
-      (b) => !(end <= b.start || start >= b.end)
-    );
-    if (clash) {
-      onRefuse(`There's no room there — “${clash.title}” already occupies it.`);
-      return;
-    }
-    onCreateBlock(date, start);
+    // Creating also makes room, so there is nothing to refuse here.
+    onCreateBlock(date, snap(yToMinutes(e.clientY)));
   }
 
   const colWidthPct = 100 / dates.length;
@@ -370,6 +347,7 @@ function TimeGrid({
                       onPointerDown={(e, mode) => startDrag(e, date, b, mode)}
                       onEdit={() => onEditBlock(date, b.id)}
                       onToggle={() => onToggleComplete(date, b.id)}
+                      onTogglePin={() => onTogglePin(date, b.id)}
                     />
                   );
                 })}
@@ -478,6 +456,7 @@ interface BlockCardProps {
   onPointerDown: (e: React.PointerEvent, mode: DragState['mode']) => void;
   onEdit: () => void;
   onToggle: () => void;
+  onTogglePin: () => void;
 }
 
 function BlockCard({
@@ -493,10 +472,12 @@ function BlockCard({
   onPointerDown,
   onEdit,
   onToggle,
+  onTogglePin,
 }: BlockCardProps) {
   const cat = resolveCategory(block.category, categories);
   const c = categoryColors(block.category, categories);
   const done = !!block.completed;
+  const pinned = !!block.pinned;
 
   // Content tiers by rendered height. A 15-minute block cannot show three lines,
   // so it shows one and drops the rest rather than clipping them.
@@ -628,6 +609,36 @@ function BlockCard({
               {done && <Check size={10} strokeWidth={3.2} className="text-paper-0" />}
             </span>
           </button>
+          {/* Pin. Stays visible while pinned, since it changes how every later
+              rearrangement behaves and that shouldn't be hidden behind a hover. */}
+          {!block.auto && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePin();
+              }}
+              aria-label={pinned ? 'Unpin — allow this to be moved' : 'Pin in place'}
+              aria-pressed={pinned}
+              title={
+                pinned
+                  ? 'Pinned — rearranging other entries will not move this'
+                  : 'Pin in place'
+              }
+              className={`grid place-items-center w-5 h-5 rounded-md transition-opacity ${
+                pinned
+                  ? 'opacity-100'
+                  : 'text-bone-3 hover:text-bone-0 opacity-0 group-hover:opacity-100'
+              }`}
+              style={pinned ? { color: 'var(--signal)' } : undefined}
+            >
+              {pinned ? (
+                <Pin size={11} strokeWidth={2.4} />
+              ) : (
+                <PinOff size={11} strokeWidth={1.8} />
+              )}
+            </button>
+          )}
           {!block.auto && (
             <button
               onPointerDown={(e) => e.stopPropagation()}
@@ -636,7 +647,7 @@ function BlockCard({
                 onEdit();
               }}
               aria-label="Edit block"
-              className="grid place-items-center w-5 h-5 rounded-md text-ink-3 hover:text-ink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="grid place-items-center w-5 h-5 rounded-md text-bone-3 hover:text-bone-0 opacity-0 group-hover:opacity-100 transition-opacity"
             >
               <Pencil size={11} strokeWidth={1.8} />
             </button>
