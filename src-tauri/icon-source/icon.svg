@@ -1,84 +1,104 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    Almanac app icon — "Instrument".
+
+    The mark is the product's own signature: a ruled time axis with scheduled
+    entries hanging off it, crossed by the amber now-line.
+
+    Two decisions worth recording, both made by looking at renders rather than
+    reasoning:
+
+    1. NOT the in-app serif-A colophon. Instrument Serif is high-contrast, and
+       its hairlines vanish below about 32px — precisely where a Dock or Finder
+       icon lives. Bars and a solid rule survive downscaling; a didone does not.
+
+    2. THE HOUR TICKS ARE LOAD-BEARING. A first pass used bone bars alone and
+       read as a content-loading skeleton, which is the last thing an icon should
+       evoke. The ticks in the left gutter establish a time axis, so the bars
+       become entries against it.
+
+    Amber carries the identification: at 16px the detail collapses, and what
+    remains has to be a dark tile with one unmistakable amber stroke.
+
+    Palette is the app's own — graphite chassis, bone for scheduled work, a
+    single amber signal. The one gradient exists only so the black doesn't read
+    as dead flat.
+  -->
   <defs>
-    <radialGradient id="paper" cx="50%" cy="38%" r="72%">
-      <stop offset="0%" stop-color="#fbf6e8"/>
-      <stop offset="55%" stop-color="#f3eada"/>
-      <stop offset="100%" stop-color="#e0d1ae"/>
-    </radialGradient>
-    <linearGradient id="ink" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#2a1d10"/>
-      <stop offset="100%" stop-color="#3d2c19"/>
+    <linearGradient id="chassis" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1c1c1a"/>
+      <stop offset="55%" stop-color="#121211"/>
+      <stop offset="100%" stop-color="#0a0a09"/>
     </linearGradient>
-    <radialGradient id="seal" cx="50%" cy="35%" r="65%">
-      <stop offset="0%" stop-color="#c5573e"/>
-      <stop offset="100%" stop-color="#8c3120"/>
+
+    <!-- One soft warm light off the top-left, so the chassis has a surface. -->
+    <radialGradient id="sheen" cx="24%" cy="10%" r="80%">
+      <stop offset="0%" stop-color="#ffb01f" stop-opacity="0.11"/>
+      <stop offset="58%" stop-color="#ffb01f" stop-opacity="0.02"/>
+      <stop offset="100%" stop-color="#ffb01f" stop-opacity="0"/>
     </radialGradient>
 
-    <!-- Apple macOS Big Sur+ icon template: 824×824 inside 1024 canvas, rx ≈ 185 -->
+    <!-- Apple macOS Big Sur+ icon template: 824×824 inside a 1024 canvas, rx ≈ 185. -->
     <clipPath id="squircle">
       <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
     </clipPath>
 
-    <filter id="grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="3"/>
-      <feColorMatrix values="0 0 0 0 0.32  0 0 0 0 0.24  0 0 0 0 0.14  0 0 0 0.16 0"/>
-      <feComposite in2="SourceGraphic" operator="in"/>
-    </filter>
-
-    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
-      <feOffset dx="0" dy="6" result="off"/>
-      <feComponentTransfer><feFuncA type="linear" slope="0.18"/></feComponentTransfer>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    <!-- Tight glow, so the now-line reads as emission rather than as blur. -->
+    <filter id="signalGlow" x="-24%" y="-320%" width="148%" height="740%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
   </defs>
 
   <g clip-path="url(#squircle)">
-    <!-- Parchment base -->
-    <rect width="1024" height="1024" fill="url(#paper)"/>
+    <!-- Chassis -->
+    <rect width="1024" height="1024" fill="url(#chassis)"/>
+    <rect width="1024" height="1024" fill="url(#sheen)"/>
 
-    <!-- Subtle paper grain -->
-    <rect width="1024" height="1024" fill="#3a2c1c" opacity="0.10" filter="url(#grain)"/>
+    <!-- Engraved bezel, echoing the squircle. The instrument-panel detail. -->
+    <rect x="152" y="152" width="720" height="720" rx="142" ry="142"
+          fill="none" stroke="#f5f2ec" stroke-opacity="0.085" stroke-width="3"/>
 
-    <!-- Inner hairline echoing the squircle -->
-    <rect x="148" y="148" width="728" height="728" rx="140" ry="140"
-          stroke="#2a1d10" stroke-opacity="0.28" stroke-width="2.2" fill="none"/>
-
-    <!-- Top eyebrow -->
-    <text x="512" y="280"
-          font-family="Georgia, 'Times New Roman', serif"
-          font-size="42" font-weight="500"
-          letter-spacing="12"
-          text-anchor="middle"
-          fill="#3d2c19"
-          opacity="0.78">
-      ALMANAC
-    </text>
-    <line x1="390" y1="304" x2="634" y2="304"
-          stroke="#2a1d10" stroke-opacity="0.32" stroke-width="1.4"/>
-
-    <!-- Big italic A, centered -->
-    <text x="512" y="720"
-          font-family="Georgia, 'Times New Roman', serif"
-          font-style="italic"
-          font-size="560"
-          font-weight="500"
-          text-anchor="middle"
-          fill="url(#ink)"
-          filter="url(#softShadow)">
-      A
-    </text>
-
-    <!-- Wax seal accent -->
-    <g transform="translate(720 812)" filter="url(#softShadow)">
-      <circle r="42" fill="url(#seal)"/>
-      <circle r="32" fill="none" stroke="#fcd9a8" stroke-opacity="0.32" stroke-width="1.4"/>
-      <text x="0" y="9"
-            font-family="Georgia, 'Times New Roman', serif"
-            font-style="italic"
-            font-size="32" font-weight="500"
-            text-anchor="middle"
-            fill="#fbf6e8">·</text>
+    <!--
+      The hour axis: five ticks on a 104px rhythm, 300 → 716, centred on 512.
+      Everything else aligns to it — a first pass had bars at arbitrary offsets
+      and the result looked accidental rather than gridded, which is the opposite
+      of the register this is going for.
+    -->
+    <g fill="#f5f2ec" fill-opacity="0.28">
+      <rect x="222" y="300" width="46" height="8" rx="4"/>
+      <rect x="222" y="404" width="46" height="8" rx="4"/>
+      <rect x="222" y="508" width="46" height="8" rx="4"/>
+      <rect x="222" y="612" width="46" height="8" rx="4"/>
+      <rect x="222" y="716" width="46" height="8" rx="4"/>
     </g>
+
+    <!--
+      Two entries, hung off the first and fourth hour. Three were tried and the
+      lower pair collapsed into one another at Dock sizes; two keeps the rhythm
+      even and leaves the now-line unambiguous. Differing widths and weights so
+      the pair reads as real entries rather than as a repeating pattern.
+    -->
+    <g>
+      <rect x="304" y="310" width="500" height="76" rx="9" fill="#f5f2ec" fill-opacity="0.32"/>
+      <rect x="304" y="622" width="412" height="76" rx="9" fill="#f5f2ec" fill-opacity="0.19"/>
+    </g>
+
+    <!--
+      The now-line, centred on the middle hour. Deliberately the loudest element,
+      and it crosses the gutter as well as the entries so it reads as a moment
+      cutting through the day rather than as a third entry. 34px tall because at
+      28 it was the first thing to disappear at 16px.
+    -->
+    <g filter="url(#signalGlow)">
+      <rect x="222" y="495" width="582" height="34" rx="17" fill="#ffb01f"/>
+      <circle cx="245" cy="512" r="44" fill="#ffb01f"/>
+    </g>
+    <!-- Chassis-coloured core: reads as a ring at large sizes and fills in solid
+         as it shrinks, so the dot never becomes a hole. -->
+    <circle cx="245" cy="512" r="18" fill="#100f0e"/>
   </g>
 </svg>

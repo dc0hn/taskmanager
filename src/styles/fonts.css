@@ -1,0 +1,21 @@
+/* ============================================================================
+   Typefaces — bundled, never fetched.
+
+   These come from @fontsource packages, so the .woff2 files are emitted into
+   dist/assets at build time and served from the app itself. The CSP's
+   `font-src 'self'` already permits that, and the product's zero-network-calls
+   property is preserved: nothing here touches a CDN at runtime.
+
+   Instrument Serif  — display. An editorial serif with real character: high
+                       contrast, narrow, slightly theatrical. Carries the almanac
+                       masthead the way a printed annual would.
+   Instrument Sans   — UI. A grotesque with more personality than Inter — tighter
+                       apertures, a little quirk in the g and a. Variable weight.
+   JetBrains Mono    — figures. Every time, date, duration and count. Tabular by
+                       default, which is why columns of numbers stop jittering.
+   ============================================================================ */
+
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+@import '@fontsource-variable/instrument-sans/index.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';

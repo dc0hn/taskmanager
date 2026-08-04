@@ -1,0 +1,542 @@
+import { describe, it, expect } from 'vitest';
+import {
+  BOOST_MULTIPLIER,
+  boostFor,
+  CATALOGUE,
+  emptyShop,
+  equip,
+  equippedValue,
+  freezeCapacity,
+  freezeSlots,
+  hasExtraWildcard,
+  inStock,
+  isBoosted,
+  itemById,
+  MAX_FREEZE_SLOTS,
+  newThisWeek,
+  offersFor,
+  pruneBoostedDates,
+  purchase,
+  rerollsFor,
+  spendBoost,
+  spendRefill,
+  spendReroll,
+  unequip,
+  weekIndexOf,
+  type ShopState,
+  setActive,
+  isActive,
+  togglable,
+} from './shop';
+import {
+  emptyProgress,
+  CYCLE_XP,
+  STAT_RETENTION_DAYS,
+  withinRetention,
+  xpToReachLevel,
+} from './progress';
+import { shiftDay } from './streaks';
+import type { UserProgress } from './types';
+
+const WEEK = '2026-07-27';
+
+function rich(brass: number, level = 60): UserProgress {
+  return {
+    ...emptyProgress(),
+    totalXp: level >= 60 ? CYCLE_XP - 1 : xpToReachLevel(level),
+    brass,
+  };
+}
+
+function shiftWeeks(weekKey: string, n: number): string {
+  const [y, m, d] = weekKey.split('-').map(Number);
+  const out = new Date(Date.UTC(y, m - 1, d) + n * 7 * 86_400_000);
+  return `${out.getUTCFullYear()}-${String(out.getUTCMonth() + 1).padStart(2, '0')}-${String(out.getUTCDate()).padStart(2, '0')}`;
+}
+
+// ---------------------------------------------------------------------------
+
+describe('the catalogue', () => {
+  it('has no duplicate ids', () => {
+    expect(new Set(CATALOGUE.map((i) => i.id)).size).toBe(CATALOGUE.length);
+  });
+
+  it('gives every item a name, blurb, price and glyph', () => {
+    for (const i of CATALOGUE) {
+      expect(i.name.length).toBeGreaterThan(0);
+      expect(i.blurb.length).toBeGreaterThan(0);
+      expect(i.price).toBeGreaterThan(0);
+      expect(i.glyph.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('sells nothing that buys progress outright', () => {
+    // The one thing the whole system is for is the work.
+    for (const i of CATALOGUE) {
+      expect(i.id).not.toMatch(/level|xp-gift|instant/);
+    }
+  });
+
+  it('gives every cosmetic a slot and a value', () => {
+    for (const i of CATALOGUE.filter((x) => x.kind === 'cosmetic')) {
+      expect(i.slot).toBeTruthy();
+      expect(i.value).toBeTruthy();
+    }
+  });
+
+  it('gives every consumable a stack limit', () => {
+    for (const i of CATALOGUE.filter((x) => x.consumable)) {
+      expect(i.stackLimit).toBeGreaterThan(0);
+    }
+  });
+
+  it('stocks all four kinds', () => {
+    expect(new Set(CATALOGUE.map((i) => i.kind))).toEqual(
+      new Set(['cosmetic', 'utility', 'quest', 'booster'])
+    );
+  });
+
+  it('keeps some stock rotating and some always available', () => {
+    expect(CATALOGUE.some((i) => i.rotation)).toBe(true);
+    expect(CATALOGUE.some((i) => !i.rotation)).toBe(true);
+  });
+});
+
+describe('rotation', () => {
+  it('counts weeks from a fixed Monday, so it matches everywhere', () => {
+    expect(weekIndexOf('2020-01-06')).toBe(0);
+    expect(weekIndexOf('2020-01-13')).toBe(1);
+    expect(weekIndexOf(WEEK)).toBeGreaterThan(300);
+  });
+
+  it('always stocks an item with no rotation', () => {
+    const always = CATALOGUE.find((i) => !i.rotation)!;
+    for (let i = 0; i < 8; i++) {
+      expect(inStock(always, shiftWeeks(WEEK, i))).toBe(true);
+    }
+  });
+
+  it('stocks a rotating item on some weeks and not others', () => {
+    const rotating = CATALOGUE.find((i) => i.rotation)!;
+    const weeks = Array.from({ length: 10 }, (_, i) => inStock(rotating, shiftWeeks(WEEK, i)));
+    expect(weeks).toContain(true);
+    expect(weeks).toContain(false);
+  });
+
+  it('is stable for the same week', () => {
+    const rotating = CATALOGUE.find((i) => i.rotation)!;
+    expect(inStock(rotating, WEEK)).toBe(inStock(rotating, WEEK));
+  });
+
+  it('reports what is newly in stock this week', () => {
+    const rotating = CATALOGUE.filter((i) => i.rotation);
+    let found = false;
+    for (let i = 0; i < 12 && !found; i++) {
+      const w = shiftWeeks(WEEK, i);
+      const prev = shiftWeeks(WEEK, i - 1);
+      if (newThisWeek(w, prev).length > 0) found = true;
+    }
+    expect(rotating.length).toBeGreaterThan(0);
+    expect(found).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('offers', () => {
+  it('hides an out-of-stock item you do not own', () => {
+    const rotating = CATALOGUE.find((i) => i.rotation)!;
+    let offWeek = WEEK;
+    for (let i = 0; i < 12; i++) {
+      const w = shiftWeeks(WEEK, i);
+      if (!inStock(rotating, w)) {
+        offWeek = w;
+        break;
+      }
+    }
+    const ids = offersFor(emptyShop(), rich(9999), offWeek).map((o) => o.item.id);
+    expect(ids).not.toContain(rotating.id);
+  });
+
+  it('keeps showing something you already own even out of stock', () => {
+    // Otherwise an owned cosmetic would vanish from the wardrobe on the wrong week.
+    const rotating = CATALOGUE.find((i) => i.rotation && i.slot)!;
+    const shop = { ...emptyShop(), owned: [rotating.id] };
+    let offWeek = WEEK;
+    for (let i = 0; i < 12; i++) {
+      const w = shiftWeeks(WEEK, i);
+      if (!inStock(rotating, w)) {
+        offWeek = w;
+        break;
+      }
+    }
+    const offer = offersFor(shop, rich(9999), offWeek).find((o) => o.item.id === rotating.id);
+    expect(offer).toBeDefined();
+    expect(offer!.owned).toBe(true);
+  });
+
+  it('refuses on brass', () => {
+    const offer = offersFor(emptyShop(), rich(0), WEEK).find((o) => o.item.id === 'meter-brass')!;
+    expect(offer.canBuy).toBe(false);
+    expect(offer.reason).toBe('brass');
+  });
+
+  it('refuses on level, and says which level', () => {
+    const progress = { ...emptyProgress(), brass: 9999, totalXp: xpToReachLevel(2) };
+    const offer = offersFor(emptyShop(), progress, WEEK).find((o) => o.item.id === 'finish-gold')!;
+    expect(offer.reason).toBe('level');
+    expect(offer.needsLevel).toBe(30);
+  });
+
+  it('never re-locks a level gate after a prestige', () => {
+    // Level resets to 1 at prestige. Re-locking a cosmetic you already qualified for
+    // would make prestige a punishment.
+    const afterPrestige = { ...emptyProgress(), brass: 9999, totalXp: CYCLE_XP + 10 };
+    const offer = offersFor(emptyShop(), afterPrestige, WEEK).find(
+      (o) => o.item.id === 'finish-gold'
+    )!;
+    expect(offer.reason).not.toBe('level');
+  });
+
+  it('refuses a one-off already owned', () => {
+    const shop = { ...emptyShop(), owned: ['meter-brass'] };
+    const offer = offersFor(shop, rich(9999), WEEK).find((o) => o.item.id === 'meter-brass')!;
+    expect(offer.reason).toBe('owned');
+  });
+
+  it('refuses a consumable already at its stack limit', () => {
+    const item = itemById('freeze-refill')!;
+    const shop = { ...emptyShop(), stock: { 'freeze-refill': item.stackLimit! } };
+    const offer = offersFor(shop, rich(9999), WEEK).find((o) => o.item.id === 'freeze-refill')!;
+    expect(offer.reason).toBe('stack');
+  });
+
+  it('refuses another freeze slot at the cap', () => {
+    const shop = { ...emptyShop(), owned: Array(MAX_FREEZE_SLOTS).fill('freeze-slot') };
+    const offer = offersFor(shop, rich(9999), WEEK).find((o) => o.item.id === 'freeze-slot')!;
+    expect(offer.reason).toBe('cap');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('purchase', () => {
+  it('buys a cosmetic and equips it immediately', () => {
+    // Buying a look and then hunting for a second control to apply it is a needless
+    // step.
+    const r = purchase(emptyShop(), rich(9999), WEEK, 'meter-brass');
+    expect(r.ok).toBe(true);
+    expect(r.spend).toBe(itemById('meter-brass')!.price);
+    expect(r.shop.owned).toContain('meter-brass');
+    expect(r.shop.equipped.meter).toBe('meter-brass');
+  });
+
+  it('refuses rather than clamping', () => {
+    // A purchase that silently did less than asked would be worse than a refusal,
+    // because the brass would be gone either way.
+    const r = purchase(emptyShop(), rich(0), WEEK, 'meter-brass');
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('brass');
+    expect(r.spend).toBe(0);
+    expect(r.shop.owned).toEqual([]);
+  });
+
+  it('leaves the original state untouched on success', () => {
+    const before = emptyShop();
+    purchase(before, rich(9999), WEEK, 'meter-brass');
+    expect(before.owned).toEqual([]);
+  });
+
+  it('stacks a consumable', () => {
+    let shop = emptyShop();
+    shop = purchase(shop, rich(9999), WEEK, 'freeze-refill').shop;
+    shop = purchase(shop, rich(9999), WEEK, 'freeze-refill').shop;
+    expect(shop.stock['freeze-refill']).toBe(2);
+  });
+
+  it('raises the freeze slot count, up to the cap, once switched on', () => {
+    let shop = emptyShop();
+    for (let i = 0; i < 5; i++) {
+      const r = purchase(shop, rich(99999), WEEK, 'freeze-slot');
+      if (r.ok) shop = r.shop;
+    }
+    // Bought is not the same as in use. Buying alone changes nothing.
+    expect(freezeSlots(shop)).toBe(0);
+    expect(freezeSlots(setActive(shop, 'freeze-slot', true))).toBe(MAX_FREEZE_SLOTS);
+  });
+
+  it('refuses an unknown id', () => {
+    expect(purchase(emptyShop(), rich(9999), WEEK, 'nonsense').ok).toBe(false);
+  });
+});
+
+describe('equipping', () => {
+  it('switches between two owned items in the same slot', () => {
+    let shop = { ...emptyShop(), owned: ['meter-brass', 'meter-bone'] };
+    shop = equip(shop, 'meter-brass');
+    expect(equippedValue(shop, 'meter')).toBe(itemById('meter-brass')!.value);
+    shop = equip(shop, 'meter-bone');
+    expect(equippedValue(shop, 'meter')).toBe(itemById('meter-bone')!.value);
+  });
+
+  it('refuses to equip what is not owned', () => {
+    const shop = equip(emptyShop(), 'meter-brass');
+    expect(shop.equipped.meter).toBeUndefined();
+  });
+
+  it('clears back to the default look', () => {
+    let shop = { ...emptyShop(), owned: ['meter-brass'] };
+    shop = equip(shop, 'meter-brass');
+    shop = unequip(shop, 'meter');
+    expect(equippedValue(shop, 'meter')).toBeNull();
+  });
+
+  it('reports null for an empty slot', () => {
+    expect(equippedValue(emptyShop(), 'title')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('consumables', () => {
+  it('spends a refill and refuses when there are none', () => {
+    const stocked = { ...emptyShop(), stock: { 'freeze-refill': 1 } };
+    const first = spendRefill(stocked);
+    expect(first.ok).toBe(true);
+    expect(first.shop.stock['freeze-refill']).toBeUndefined();
+    expect(spendRefill(first.shop).ok).toBe(false);
+  });
+
+  it('boosts a day, once', () => {
+    const stocked = { ...emptyShop(), stock: { 'boost-day': 2 } };
+    const first = spendBoost(stocked, '2026-07-30');
+    expect(first.ok).toBe(true);
+    expect(isBoosted(first.shop, '2026-07-30')).toBe(true);
+    expect(boostFor(first.shop, '2026-07-30')).toBe(BOOST_MULTIPLIER);
+
+    // The same day cannot be boosted twice, even with stock left.
+    const second = spendBoost(first.shop, '2026-07-30');
+    expect(second.ok).toBe(false);
+    expect(second.shop.stock['boost-day']).toBe(1);
+  });
+
+  it('leaves an unboosted day at a multiplier of one', () => {
+    expect(boostFor(emptyShop(), '2026-07-30')).toBe(1);
+  });
+
+  it('records boosted days so the score can be audited', () => {
+    // A booster that hid itself would quietly corrupt every insight downstream.
+    const stocked = { ...emptyShop(), stock: { 'boost-day': 1 } };
+    const r = spendBoost(stocked, '2026-07-30');
+    expect(r.shop.boostedDates).toContain('2026-07-30');
+  });
+
+  it('never drops a boosted day that reconciliation can still reach', () => {
+    // The bug this closes: the list kept only the last sixty dates, so buying the
+    // sixty-first boost un-boosted the oldest day. Reconciliation recomputes from
+    // blocks, so the next visit to that month took the doubled half of its XP back
+    // out of the lifetime total — a clawback months after the fact.
+    let shop: ShopState = {
+      ...emptyShop(),
+      stock: { 'boost-day': 70 },
+    };
+    const dates: string[] = [];
+    for (let i = 0; i < 70; i++) {
+      const date = shiftDay('2026-07-30', -i);
+      dates.push(date);
+      const r = spendBoost(shop, date);
+      expect(r.ok).toBe(true);
+      shop = r.shop;
+    }
+
+    // All seventy are still boosted, including the ones a count cap would have lost.
+    for (const date of dates) {
+      expect(isBoosted(shop, date)).toBe(true);
+      expect(boostFor(shop, date)).toBe(BOOST_MULTIPLIER);
+    }
+  });
+
+  it('forgets only boosted days past the reconciliation window', () => {
+    const today = '2026-07-30';
+    const recent = shiftDay(today, -STAT_RETENTION_DAYS + 1);
+    const ancient = shiftDay(today, -STAT_RETENTION_DAYS - 1);
+
+    const kept = pruneBoostedDates([ancient, recent, today], today);
+    expect(kept).toEqual([recent, today]);
+    // The dropped day is beyond retention, so it can never be reconciled again and
+    // its XP is already banked. Forgetting the boost costs nothing.
+    expect(withinRetention(ancient, today)).toBe(false);
+  });
+
+  it('spends a reroll against the week it was used on', () => {
+    const stocked = { ...emptyShop(), stock: { 'quest-reroll': 1 } };
+    const r = spendReroll(stocked, WEEK);
+    expect(r.ok).toBe(true);
+    expect(rerollsFor(r.shop, WEEK)).toBe(1);
+    expect(rerollsFor(r.shop, '2026-08-03')).toBe(0);
+    expect(spendReroll(r.shop, WEEK).ok).toBe(false);
+  });
+});
+
+describe('permanent upgrades', () => {
+  it('raises freeze capacity by what was bought AND switched on', () => {
+    expect(freezeCapacity(emptyShop(), 1)).toBe(1);
+    const owned = { ...emptyShop(), owned: ['freeze-slot', 'freeze-slot'] };
+    expect(freezeCapacity(owned, 1)).toBe(1);
+    expect(freezeCapacity({ ...owned, active: ['freeze-slot'] }, 1)).toBe(3);
+  });
+
+  it('never raises capacity past the cap, whatever the record says', () => {
+    expect(
+      freezeCapacity(
+        { ...emptyShop(), owned: Array(99).fill('freeze-slot'), active: ['freeze-slot'] },
+        1
+      )
+    ).toBe(1 + MAX_FREEZE_SLOTS);
+  });
+
+  it('reports the extra wildcard only while it is switched on', () => {
+    expect(hasExtraWildcard(emptyShop())).toBe(false);
+    const owned = { ...emptyShop(), owned: ['quest-extra'] };
+    expect(hasExtraWildcard(owned)).toBe(false);
+    expect(hasExtraWildcard({ ...owned, active: ['quest-extra'] })).toBe(true);
+  });
+});
+
+describe('prestige stock', () => {
+  const cycled = (prestige: number): UserProgress => ({
+    ...emptyProgress(),
+    brass: 9999,
+    totalXp: CYCLE_XP * prestige + 100,
+  });
+
+  it('refuses before a cycle is complete, and says which reason', () => {
+    const offer = offersFor(emptyShop(), cycled(0), WEEK).find(
+      (o) => o.item.id === 'title-almanacker'
+    )!;
+    expect(offer.canBuy).toBe(false);
+    expect(offer.reason).toBe('prestige');
+  });
+
+  it('stays visible while locked, because that is the point of it', () => {
+    // A reward you cannot see is not one you are working toward.
+    const ids = offersFor(emptyShop(), cycled(0), WEEK).map((o) => o.item.id);
+    expect(ids).toContain('title-almanacker');
+    expect(ids).toContain('finish-meridian');
+  });
+
+  it('opens once a cycle is done', () => {
+    const offer = offersFor(emptyShop(), cycled(1), WEEK).find(
+      (o) => o.item.id === 'title-almanacker'
+    )!;
+    expect(offer.canBuy).toBe(true);
+  });
+});
+
+describe('the instruments and consumables', () => {
+  it('gives every new consumable a stack limit, and respects it', () => {
+    for (const id of ['use-assay', 'use-bench-day', 'use-reprieve', 'use-double-bill']) {
+      const item = itemById(id)!;
+      expect(item.consumable, id).toBe(true);
+      expect(item.stackLimit, id).toBeGreaterThan(0);
+
+      const full = { ...emptyShop(), stock: { [id]: item.stackLimit! } };
+      const offer = offersFor(full, rich(9999), WEEK).find((o) => o.item.id === id)!;
+      expect(offer.reason, id).toBe('stack');
+    }
+  });
+
+  it('treats every instrument as a one-off', () => {
+    for (const id of ['inst-loupe', 'inst-almanac-hand', 'inst-brass-scales']) {
+      const owned = { ...emptyShop(), owned: [id] };
+      const offer = offersFor(owned, rich(9999), WEEK).find((o) => o.item.id === id)!;
+      expect(offer.reason, id).toBe('owned');
+    }
+  });
+
+  it('still sells nothing that buys progress outright', () => {
+    // The rule that outranks every mechanic here.
+    for (const i of CATALOGUE) {
+      expect(i.id).not.toMatch(/level|xp-gift|instant/);
+    }
+  });
+
+  it('does not sell the week strip shadow, which is free', () => {
+    // It shipped free before the catalogue was written, and taking a working feature away
+    // to sell it back would make the shop worse.
+    expect(CATALOGUE.find((i) => i.id === 'inst-second-hand')).toBeUndefined();
+  });
+
+  it('does not sell a retention extension, which would double-count pruned days', () => {
+    // Raising STAT_RETENTION_DAYS makes already-pruned days pass `withinRetention` again,
+    // and reconciliation would read each as a whole day rather than a delta.
+    expect(CATALOGUE.find((i) => i.id === 'inst-ledger-rule')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Owning something and using it are separate facts
+// ---------------------------------------------------------------------------
+
+describe('switching an owned item on and off', () => {
+  const withOwned = (...ids: string[]) => ({ ...emptyShop(), owned: ids });
+
+  it('starts off, so nothing applies the moment it is paid for', () => {
+    const r = purchase(emptyShop(), rich(9999), WEEK, 'quest-extra');
+    expect(r.ok).toBe(true);
+    expect(r.shop!.active).toEqual([]);
+    expect(hasExtraWildcard(r.shop!)).toBe(false);
+  });
+
+  it('switches on and back off', () => {
+    let shop = withOwned('quest-extra');
+    shop = setActive(shop, 'quest-extra', true);
+    expect(isActive(shop, 'quest-extra')).toBe(true);
+    shop = setActive(shop, 'quest-extra', false);
+    expect(isActive(shop, 'quest-extra')).toBe(false);
+  });
+
+  it('is idempotent in both directions', () => {
+    // What lets a caller send the intended STATE rather than having to know the
+    // current one — a toggle that appends on every click would activate an item twice
+    // and need two clicks to switch off.
+    const shop = setActive(withOwned('quest-extra'), 'quest-extra', true);
+    expect(setActive(shop, 'quest-extra', true)).toBe(shop);
+    const off = setActive(shop, 'quest-extra', false);
+    expect(setActive(off, 'quest-extra', false)).toBe(off);
+    expect(off.active).toEqual([]);
+  });
+
+  it('refuses to activate something not owned', () => {
+    const shop = setActive(emptyShop(), 'quest-extra', true);
+    expect(shop.active).toEqual([]);
+  });
+
+  it('refuses cosmetics, which have equipping instead', () => {
+    // A finish that was both equipped and inactive would have no readable meaning.
+    const shop = setActive(withOwned('finish-bronze'), 'finish-bronze', true);
+    expect(shop.active).toEqual([]);
+    expect(togglable(itemById('finish-bronze')!)).toBe(false);
+  });
+
+  it('refuses consumables, which are spent rather than worn', () => {
+    const shop = setActive({ ...emptyShop(), stock: { 'boost-day': 1 } }, 'boost-day', true);
+    expect(shop.active).toEqual([]);
+    expect(togglable(itemById('boost-day')!)).toBe(false);
+  });
+
+  it('marks the permanents that should carry a switch', () => {
+    expect(togglable(itemById('freeze-slot')!)).toBe(true);
+    expect(togglable(itemById('quest-extra')!)).toBe(true);
+    expect(togglable(itemById('inst-loupe')!)).toBe(true);
+  });
+
+  it('keeps the switch when something else is bought', () => {
+    let shop = setActive(withOwned('quest-extra'), 'quest-extra', true);
+    const r = purchase(shop, rich(9999), WEEK, 'freeze-slot');
+    expect(r.ok).toBe(true);
+    shop = r.shop!;
+    expect(isActive(shop, 'quest-extra')).toBe(true);
+    expect(isActive(shop, 'freeze-slot')).toBe(false);
+  });
+});
