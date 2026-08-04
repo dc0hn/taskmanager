@@ -33,6 +33,7 @@ import {
   type SeasonRecord,
 } from './seasons';
 import YearPage from './components/YearPage';
+import BootSequence from './components/pixel/BootSequence';
 import {
   commissionFor,
   payoutFor,
@@ -116,6 +117,8 @@ import {
   equip as equipItem,
   hasExtraWildcard,
   offersFor,
+  setActive,
+  spendBoost,
   spendRefill,
   unequip as unequipSlot,
 } from './shop';
@@ -200,6 +203,7 @@ import {
   reflowPlace,
   reflowRemove,
 } from './reflow';
+import { clearToIntake, hasClearableBlocks } from './unschedule';
 import {
   buildWeekReview,
   dropFromCarryover,
@@ -207,6 +211,7 @@ import {
   issueRecurringGoals,
   goalRunPayouts,
   openGoals as openGoalsOf,
+  outcomeHistory,
   pruneCredits,
   pullFromCarryover,
   reconcileCredits,
@@ -309,6 +314,14 @@ export default function App() {
   const [date, setDate] = useState(todayKey);
   const [monthCursor, setMonthCursor] = useState(todayKey);
   const [goalsWeek, setGoalsWeek] = useState(() => currentWeekKey());
+  /**
+   * The week containing today, and which week that was last time it changed.
+   *
+   * Derived from `todayKey` rather than read from the clock, so it advances with the
+   * midnight tick instead of only when something else happens to re-render.
+   */
+  const thisWeek = useMemo(() => toWeekKey(todayKey), [todayKey]);
+  const lastCurrentWeek = useRef(thisWeek);
 
   const [plans, setPlans] = useState<Record<string, DayPlan>>(() => ({
     [todayKey]: loadPlan(todayKey),
@@ -884,13 +897,48 @@ export default function App() {
       setCarryover(monthResult.carryover);
     }
 
-    if (result.changed || issued) setWeek(loadWeek(weekKey));
+    if (result.changed || issued) {
+      setWeek(loadWeek(weekKey));
+      // Anything derived by reading week records out of storage has to be told they
+      // moved. The history panel is the case that made this necessary: it is a memo
+      // over `loadAllWeeks()`, so it runs during the first render — before this effect
+      // has sealed anything — and on a launch after a week away the week that just
+      // ended would have been missing from the record until the next relaunch.
+      setWeekEpoch((n) => n + 1);
+    }
   }, [awards.granted, weekKey, todayKey]);
 
   // Swap the loaded week record when the displayed week changes.
   useEffect(() => {
     setWeek((prev) => (prev.week === weekKey ? prev : loadWeek(weekKey)));
   }, [weekKey]);
+
+  /**
+   * Carry the goals view across Monday morning.
+   *
+   * The rollover above is already correct at the storage level, but it writes the NEW
+   * week while this cursor still points at the old one — so a session left open over
+   * the weekend went on showing Sunday's goals, at Sunday's progress, with the reissued
+   * week sitting unseen in storage. The reset had happened; it just wasn't on screen,
+   * which from the outside is indistinguishable from it not happening at all.
+   *
+   * Follow only if we were following. Someone who has deliberately paged back to review
+   * a past week must not be yanked into the present because midnight passed while they
+   * were reading — so the cursor advances only when it was sitting on the week that has
+   * just ended. `lastCurrentWeek` is what makes that distinction possible: it records
+   * which week was current the last time this ran, and the cursor moves only if it still
+   * matches that.
+   *
+   * Ordered after the rollover effect deliberately. Effects run in declaration order, so
+   * by the time this advances the cursor the new week has already been written and
+   * sealed, and the read below finds a record rather than creating an empty one.
+   */
+  useEffect(() => {
+    const previous = lastCurrentWeek.current;
+    if (previous === thisWeek) return;
+    lastCurrentWeek.current = thisWeek;
+    setGoalsWeek((cursor) => (cursor === previous ? thisWeek : cursor));
+  }, [thisWeek]);
 
   // -------------------------------------------------------------------------
   // Ledger reconciliation
@@ -1313,6 +1361,22 @@ export default function App() {
     [goalsWeek, week]
   );
 
+  /**
+   * The record of finished weeks — what survives the Monday reset.
+   *
+   * `weekEpoch` and `thisWeek` are the deps that matter: the first fires when a week is
+   * sealed mid-session, the second when the boundary passes, and between them the
+   * history picks up the week that has just ended without needing a relaunch.
+   */
+  const goalHistory = useMemo(
+    () => outcomeHistory(loadAllWeeks()),
+    // Reads week records out of storage, which is not reactive, so the deps eslint calls
+    // unnecessary are the only thing that invalidates this. It cannot see through
+    // `loadAllWeeks`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [weekEpoch, thisWeek]
+  );
+
   const reviewSeen = useRef('');
 
   const review = useMemo(() => {
@@ -1721,20 +1785,62 @@ export default function App() {
   );
 
   /**
-   * Spend a freeze refill the moment one is held and a freeze is missing.
+   * Switch an owned permanent on or off.
    *
-   * Applied automatically for the same reason the freeze itself is: something bought
-   * to protect a run should not need remembering at the moment it is needed.
+   * `setActive` refuses anything not owned or not switchable, so this passes the
+   * intent straight through rather than checking first — the rule lives in one place
+   * and every caller gets it.
    */
-  useEffect(() => {
-    if ((shop.stock['freeze-refill'] ?? 0) === 0) return;
-    if (streak.freezes >= streak.capacity) return;
-    const r = spendRefill(shop);
-    if (!r.ok) return;
-    dispatch({ type: 'ShopChanged', shop: r.shop });
-    dispatch({ type: 'FreezesSet', freezes: streak.freezes + 1 });
-    setToast('Freeze refilled.');
-  }, [shop, streak.freezes, streak.capacity]);
+  const handleToggleActive = useCallback(
+    (itemId: string, on: boolean) =>
+      dispatch({ type: 'ShopChanged', shop: setActive(shop, itemId, on) }),
+    [shop]
+  );
+
+  /**
+   * Spend a consumable, deliberately.
+   *
+   * The freeze refill used to spend ITSELF: an effect watched the freeze count and
+   * cashed one in the moment a freeze was missing. The reasoning was that protection
+   * should not need remembering — but the effect of it was that something bought for a
+   * bad week was gone by Tuesday of a good one, spent on a gap that did not matter,
+   * with a toast as the only notice. A safety net you cannot choose to hold is not a
+   * safety net, it is a slow refund.
+   *
+   * Both arms report what happened. A consumable that silently declines to work is
+   * worse than one that refuses out loud, because the stock still went down in the
+   * only place anyone would think to look.
+   */
+  const handleUseItem = useCallback(
+    (itemId: string) => {
+      if (itemId === 'freeze-refill') {
+        if (streak.freezes >= streak.capacity) {
+          setToast('Your freezes are already full.');
+          return;
+        }
+        const r = spendRefill(shop);
+        if (!r.ok) return;
+        dispatch({ type: 'ShopChanged', shop: r.shop });
+        dispatch({ type: 'FreezesSet', freezes: streak.freezes + 1 });
+        setToast('Freeze refilled.');
+        return;
+      }
+
+      if (itemId === 'boost-day') {
+        // Today, not a date picker. A past day would re-score history, and a future
+        // one commits the booster to a day you cannot yet see — whereas "today" is
+        // the decision someone actually wants to make, at the moment they want it.
+        const r = spendBoost(shop, todayKey);
+        if (!r.ok) {
+          setToast('Today is already boosted.');
+          return;
+        }
+        dispatch({ type: 'ShopChanged', shop: r.shop });
+        setToast('Today counts double. It will be marked as boosted in the record.');
+      }
+    },
+    [shop, streak.freezes, streak.capacity, todayKey]
+  );
 
   /**
    * Paid the first time a card is actually opened.
@@ -1815,6 +1921,41 @@ export default function App() {
     [dayPlan.blocks]
   );
 
+  /** Is there anything a clear would actually move? */
+  const canUnschedule = useMemo(
+    () => hasClearableBlocks(dayPlan.blocks),
+    [dayPlan.blocks]
+  );
+
+  /**
+   * Empty the day back into the intake, keeping what must not move.
+   *
+   * The rule itself lives in `clearToIntake` — what stays is the entire safety of this
+   * operation, and a rule inside a click handler is a rule nothing can assert.
+   */
+  const handleUnscheduleUnpinned = useCallback(() => {
+    const plan = plansRef.current[date];
+    if (!plan) return;
+
+    const { kept, returned, pinnedKept } = clearToIntake(plan.blocks);
+    if (returned.length === 0) return;
+
+    mutateDay(
+      date,
+      (p) => ({ ...p, blocks: kept, tasks: [...p.tasks, ...returned] }),
+      'clearing the day'
+    );
+    setOverflow([]);
+    setOverflowReasons({});
+    setToast(
+      pinnedKept > 0
+        ? `${returned.length} back in the intake. ${pinnedKept} pinned ${
+            pinnedKept === 1 ? 'entry' : 'entries'
+          } left in place.`
+        : `${returned.length} back in the intake.`
+    );
+  }, [date, mutateDay]);
+
   // -------------------------------------------------------------------------
   // Day-level actions
   // -------------------------------------------------------------------------
@@ -1887,6 +2028,12 @@ export default function App() {
         priority: 'normal' as const,
         goalId: b.goalId,
         templateId: b.templateId,
+        // Both of these have to survive the round trip. A rebuild turns every block
+        // back into a task and schedules it again, so anything not copied here is
+        // silently discarded by the act of rearranging the day — the note would
+        // vanish, and a block deliberately kept whole would come back in chunks.
+        notes: b.notes,
+        keepWhole: b.keepWhole,
       }));
 
     const result = buildSchedule(
@@ -1933,6 +2080,12 @@ export default function App() {
         priority: 'normal' as const,
         goalId: b.goalId,
         templateId: b.templateId,
+        // Both of these have to survive the round trip. A rebuild turns every block
+        // back into a task and schedules it again, so anything not copied here is
+        // silently discarded by the act of rearranging the day — the note would
+        // vanish, and a block deliberately kept whole would come back in chunks.
+        notes: b.notes,
+        keepWhole: b.keepWhole,
       }));
 
     const toPlace = [...plan.tasks, ...reflow];
@@ -2641,6 +2794,8 @@ export default function App() {
               onToday={() => setDate(todayKey)}
               onAdd={handleQuickAdd}
               canReplan={canReplan && view === 'day'}
+              canUnschedule={canUnschedule && view === 'day'}
+              onUnschedule={handleUnscheduleUnpinned}
               onRebuildFromNow={handleRebuildFromNow}
               undoCount={undoCount}
               onUndo={undo}
@@ -2776,6 +2931,7 @@ export default function App() {
               carryover={carryover}
               categories={categories}
               review={review}
+              history={goalHistory}
               monthRatios={monthRatios}
               onAddGoal={handleAddGoal}
               onRemoveGoal={handleRemoveGoal}
@@ -2803,6 +2959,8 @@ export default function App() {
               onBuy={handleBuy}
               onEquipItem={handleEquip}
               onUnequipSlot={handleUnequip}
+              onToggleActive={handleToggleActive}
+              onUseItem={handleUseItem}
               previousWeekKey={addWeeks(weekKey, -1)}
               codex={codex}
               onReadInsight={handleReadInsight}
@@ -2979,6 +3137,13 @@ export default function App() {
         onClose={() => setYearPageOpen(false)}
         onNotify={setToast}
       />
+
+      {/*
+        Last in the tree and highest in the stack, so everything above renders underneath it
+        from the first frame. This is a curtain that leaves, not a gate that opens — and it
+        owns its own lifecycle, so there is no flag here for anything to flip back.
+      */}
+      <BootSequence />
 
       <Toast message={toast} onDismiss={() => setToast(null)} />
     </div>

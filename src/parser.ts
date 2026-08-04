@@ -106,6 +106,28 @@ function tryRange(tok: string): { start: number; end: number } | null {
   return { start, end };
 }
 
+/**
+ * Minutes from a duration token: `2h`, `1h30m`, `90m`, `45`.
+ *
+ * Exported so the duration field in the task editor accepts exactly what the intake
+ * line accepts. Two parsers for the same notation would drift, and the way that shows
+ * up is somebody typing `1h30` in one box, watching it work, and typing it in the
+ * other box where it silently means something else.
+ */
+export function parseDuration(tok: string): number | null {
+  const trimmed = tok.trim();
+  // Bare number means minutes. Only accepted HERE, not in the intake line, where a
+  // stray "90" is far more likely to be part of a title than a duration.
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number(trimmed);
+    return n > 0 ? n : null;
+  }
+  // `1h30` with no trailing unit — natural to type, and unambiguous.
+  const loose = trimmed.match(/^(\d+)(?:h|hr)(\d+)$/i);
+  if (loose) return Number(loose[1]) * 60 + Number(loose[2]);
+  return tryDuration(trimmed);
+}
+
 function tryDuration(tok: string): number | null {
   // h-only: 2h, 1hr
   let m = tok.match(/^(\d+)(h|hr|hour|hours)$/i);

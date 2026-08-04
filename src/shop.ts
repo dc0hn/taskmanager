@@ -79,6 +79,19 @@ export interface ShopState {
   boostedDates: string[];
   /** Weeks whose wildcard has been rerolled, and how many times. */
   rerolls: Record<string, number>;
+  /**
+   * Permanent non-cosmetic items that are switched ON. Absent means off.
+   *
+   * Owning something and using it are separate facts. A freeze slot or an extra
+   * wildcard changes how the app scores and what it asks of you, and applying that the
+   * instant it is paid for takes the decision away at exactly the moment it should be
+   * offered — you bought the option, not the obligation.
+   *
+   * Stored as what is ON rather than what is off, so a profile written before this
+   * existed reads as an empty list, and nothing silently switches itself on when the
+   * catalogue grows. See `setActive`.
+   */
+  active: string[];
 }
 
 export function emptyShop(): ShopState {
@@ -88,6 +101,7 @@ export function emptyShop(): ShopState {
     equipped: {},
     boostedDates: [],
     rerolls: {},
+    active: [],
   };
 }
 
@@ -484,6 +498,51 @@ export interface Offer {
   needsLevel: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Switching an owned item on and off
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether an item can be switched at all.
+ *
+ * Cosmetics are excluded because they already have a better answer: a slot holds one
+ * item, so `equip` IS the switch, and giving them a second on/off state would let a
+ * finish be both equipped and inactive with no way to tell which was meant.
+ *
+ * Consumables are excluded because a switch is the wrong shape for them entirely.
+ * They are not worn, they are spent — the decision is WHEN, not whether, and that is
+ * what `stock` and the spend functions below already model.
+ */
+export function togglable(item: ShopItem): boolean {
+  return !item.slot && !item.consumable;
+}
+
+/** Whether an owned permanent is currently in effect. */
+export function isActive(shop: ShopState, itemId: string): boolean {
+  return shop.active.includes(itemId);
+}
+
+/**
+ * Switch an owned permanent on or off.
+ *
+ * Refuses anything not owned, so a profile cannot carry an active item it never
+ * bought, and refuses cosmetics and consumables per `togglable`. Idempotent in both
+ * directions, which is what lets the caller send the intended STATE rather than
+ * having to know the current one.
+ */
+export function setActive(shop: ShopState, itemId: string, on: boolean): ShopState {
+  const item = itemById(itemId);
+  if (!item || !togglable(item) || !shop.owned.includes(itemId)) return shop;
+  const already = shop.active.includes(itemId);
+  if (already === on) return shop;
+  return {
+    ...shop,
+    active: on
+      ? [...shop.active, itemId]
+      : shop.active.filter((id) => id !== itemId),
+  };
+}
+
 /** How many of a permanent item are held. `owned` is a multiset for this reason. */
 export function ownedCount(shop: ShopState, itemId: string): number {
   return shop.owned.filter((id) => id === itemId).length;
@@ -496,6 +555,9 @@ export function ownedCount(shop: ShopState, itemId: string): number {
  * disagree — the same reasoning that made lifetime brass earnings derived.
  */
 export function freezeSlots(shop: ShopState): number {
+  // Owned but switched off contributes nothing. The slot is a capacity you have
+  // bought the right to use, not one that turns itself on the moment it is paid for.
+  if (!isActive(shop, 'freeze-slot')) return 0;
   return Math.min(MAX_FREEZE_SLOTS, ownedCount(shop, 'freeze-slot'));
 }
 
@@ -567,6 +629,7 @@ export function purchase(
   const next: ShopState = {
     ...shop,
     owned: [...shop.owned],
+    active: [...shop.active],
     stock: { ...shop.stock },
     equipped: { ...shop.equipped },
     boostedDates: [...shop.boostedDates],
@@ -689,7 +752,7 @@ export function rerollsFor(shop: ShopState, weekKey: string): number {
 }
 
 export function hasExtraWildcard(shop: ShopState): boolean {
-  return shop.owned.includes('quest-extra');
+  return shop.owned.includes('quest-extra') && isActive(shop, 'quest-extra');
 }
 
 /** How many freezes the streak may hold, given what has been bought. */

@@ -129,6 +129,21 @@ export interface Task {
   goalId?: string;
   /** Set when this task came from a recurring template. */
   templateId?: string;
+  /** Free text carried onto every block this task becomes. See `Block.notes`. */
+  notes?: string;
+  /**
+   * Schedule this as ONE block of exactly `duration`, however long that is.
+   *
+   * Long focus work is otherwise split into ~90-minute chunks with a break between,
+   * which is right by default — the envelope exists because three unbroken hours of
+   * deep work is a worse three hours. But it is a default, not a fact about the work,
+   * and some things genuinely cannot be cut in half: a workshop, a shoot, a surgery
+   * list, a three-hour exam.
+   *
+   * Absent means "let the scheduler decide", which is what every task created before
+   * this existed meant, so the default survives a reload unchanged.
+   */
+  keepWhole?: boolean;
 }
 
 export interface Block {
@@ -178,7 +193,35 @@ export interface Block {
    * the number meaningless.
    */
   moves?: number;
+  /**
+   * Free text attached to the entry — a meeting link, a dial-in, a thought to keep
+   * with the thing it belongs to.
+   *
+   * Plain text, never markup. It is rendered as text with URLs detected at display
+   * time rather than stored as HTML, so there is nothing in a note that can become
+   * an element. See `utils/linkify.ts`.
+   *
+   * Deliberately NOT scored. Nothing in the progression layer reads this, and nothing
+   * should: the moment a note earns XP it stops being somewhere to put a thought and
+   * becomes another box the app wants filled in.
+   */
+  notes?: string;
+  /**
+   * Carried from the Task so the decision survives a rebuild.
+   *
+   * "Rebuild from now" turns every unfinished block back into a task and schedules it
+   * again. Without this the flag would live only on the Task, which the rebuild
+   * discards — so a three-hour block kept whole would quietly come back as two chunks
+   * the first time the day was rearranged, and nothing would say why.
+   */
+  keepWhole?: boolean;
 }
+
+/**
+ * Longest note kept. Generous for a dial-in and a paragraph of thinking, short of the
+ * point where a plan record becomes a document store.
+ */
+export const MAX_NOTE_LENGTH = 2000;
 
 export interface DayPlan {
   date: string; // YYYY-MM-DD
@@ -286,6 +329,36 @@ export interface WeekRecord {
     weekly: string;
     wildcards: string[];
   };
+  /**
+   * How the week finished, written once at rollover. Absent on weeks predating this
+   * and on the week in progress.
+   *
+   * Sealed rather than recomputed for the same reason `character` and `draws` are.
+   * Weekly goals are REISSUED at full target every Monday, so the live figures reset
+   * by design — and the only place a miss survives is the record of the week it
+   * happened in. Recomputing that from `goals` + `credits` works today, but it makes
+   * every past week's history a function of code that is still changing: prune the
+   * credits, rename a target kind, alter how a ceiling scores, and weeks that were
+   * met silently become missed. A tally is small, and it makes history immutable.
+   */
+  outcome?: WeekOutcome;
+}
+
+/**
+ * The count of each outcome in a finished week. Sums to the number of goals it held.
+ *
+ * `exceeded` and `voided` are their own buckets and are never folded into `missed` —
+ * going past a ceiling you set yourself is information, and standing a goal down is a
+ * decision. Neither is a failure, and the record must not report them as one.
+ */
+export interface WeekOutcome {
+  met: number;
+  slipped: number;
+  missed: number;
+  voided: number;
+  exceeded: number;
+  /** Goals the week held. Kept so "2 missed" can be read against how many were set. */
+  total: number;
 }
 
 export interface CarryoverItem {

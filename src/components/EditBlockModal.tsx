@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Pin, PinOff, Trash2, X } from 'lucide-react';
+import { ExternalLink, Pin, PinOff, Trash2, X } from 'lucide-react';
 import type { Block, CategoryDef } from '../types';
+import { MAX_NOTE_LENGTH } from '../types';
+import { linkify } from '../utils/linkify';
+import { openExternal } from '../utils/external';
 import { payoutFor, STAKES, type Commission } from '../commissions';
 import { colorsFor } from '../utils/color';
 import { minutesTo24h, parse24h } from '../utils/time';
@@ -58,6 +61,7 @@ export default function EditBlockModal({
   const [end, setEnd] = useState(target ? minutesTo24h(target.block.end) : '');
   const [category, setCategory] = useState(target?.block.category ?? 'other');
   const [pinned, setPinned] = useState(target?.block.pinned === true);
+  const [notes, setNotes] = useState(target?.block.notes ?? '');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -93,7 +97,17 @@ export default function EditBlockModal({
     onSave(
       target.date,
       target.block.id,
-      { title: title.trim() || 'Untitled', start: s, end: e, category, pinned },
+      {
+        title: title.trim() || 'Untitled',
+        start: s,
+        end: e,
+        category,
+        pinned,
+        // Empty becomes undefined rather than an empty string, so the field is
+        // absent when there is no note — the same shape the normaliser produces on
+        // read, which keeps a saved-then-reloaded block equal to itself.
+        notes: notes.trim() ? notes.slice(0, MAX_NOTE_LENGTH) : undefined,
+      },
       moving ? date : undefined
     );
   }
@@ -240,6 +254,31 @@ export default function EditBlockModal({
                 </p>
               </div>
 
+              <div>
+                <Label>Notes</Label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value.slice(0, MAX_NOTE_LENGTH))}
+                  rows={3}
+                  placeholder="Meeting link, dial-in, a thought to keep with this…"
+                  className="input w-full text-[12.5px] px-2.5 py-2 leading-relaxed resize-y min-h-[62px] focus:outline-none"
+                />
+                <div className="flex items-baseline justify-between gap-3 mt-1.5">
+                  <p className="text-[11px] text-bone-3 leading-snug">
+                    Links open in your browser, not in here.
+                  </p>
+                  {/* Shown only as the cap approaches. A counter on an empty field is
+                      the app asking to be filled in; a counter at 1,900 characters is
+                      a warning worth having before the typing is silently truncated. */}
+                  {notes.length > MAX_NOTE_LENGTH - 200 && (
+                    <span className="font-mono text-[10.5px] text-bone-3 tnum shrink-0">
+                      {notes.length}/{MAX_NOTE_LENGTH}
+                    </span>
+                  )}
+                </div>
+                <NoteLinks notes={notes} onFail={setError} />
+              </div>
+
               <AnimatePresence>
                 {error && (
                   <motion.p
@@ -294,6 +333,69 @@ export default function EditBlockModal({
       )}
     </AnimatePresence>
   );
+}
+
+/**
+ * The links found in a note, as buttons.
+ *
+ * Buttons rather than anchors, deliberately. An `<a href>` in a webview navigates it,
+ * and the one thing that must not happen here is the calendar being replaced by a web
+ * page. There is no href to middle-click, no target to get wrong, and no way for a
+ * pasted string to become a live element — the note is text, and this reads it.
+ *
+ * Rendered live from the textarea rather than from the saved block, so pasting a link
+ * shows it immediately and you can tell it was recognised before committing the save.
+ */
+function NoteLinks({
+  notes,
+  onFail,
+}: {
+  notes: string;
+  onFail: (message: string) => void;
+}) {
+  const links = linkify(notes).filter((s) => s.kind === 'link');
+  if (links.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2">
+      {links.map((link, i) => (
+        <button
+          key={`${link.href}-${i}`}
+          onClick={async () => {
+            const failure = await openExternal(link.href);
+            if (failure) onFail(failure);
+          }}
+          title={link.href}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium max-w-full transition-all"
+          style={{
+            background: 'var(--signal-dim)',
+            border: '1px solid var(--signal-line)',
+            color: 'var(--signal)',
+          }}
+        >
+          <ExternalLink size={11} strokeWidth={2} className="shrink-0" />
+          <span className="truncate">{prettyHost(link.href)}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * "zoom.us/j/1234…" — enough to tell two links apart without the query string.
+ *
+ * Falls back to the whole string rather than throwing: this runs on text someone is
+ * still typing, so it is handed half-finished URLs constantly.
+ */
+function prettyHost(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname === '/' ? '' : u.pathname;
+    const shown = `${u.host}${path}`;
+    return shown.length > 42 ? `${shown.slice(0, 41)}…` : shown;
+  } catch {
+    return url;
+  }
 }
 
 function Label({ children }: { children: React.ReactNode }) {

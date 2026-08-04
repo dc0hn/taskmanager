@@ -24,6 +24,9 @@ import {
   unequip,
   weekIndexOf,
   type ShopState,
+  setActive,
+  isActive,
+  togglable,
 } from './shop';
 import {
   emptyProgress,
@@ -251,13 +254,15 @@ describe('purchase', () => {
     expect(shop.stock['freeze-refill']).toBe(2);
   });
 
-  it('raises the freeze slot count, up to the cap', () => {
+  it('raises the freeze slot count, up to the cap, once switched on', () => {
     let shop = emptyShop();
     for (let i = 0; i < 5; i++) {
       const r = purchase(shop, rich(99999), WEEK, 'freeze-slot');
       if (r.ok) shop = r.shop;
     }
-    expect(freezeSlots(shop)).toBe(MAX_FREEZE_SLOTS);
+    // Bought is not the same as in use. Buying alone changes nothing.
+    expect(freezeSlots(shop)).toBe(0);
+    expect(freezeSlots(setActive(shop, 'freeze-slot', true))).toBe(MAX_FREEZE_SLOTS);
   });
 
   it('refuses an unknown id', () => {
@@ -374,20 +379,27 @@ describe('consumables', () => {
 });
 
 describe('permanent upgrades', () => {
-  it('raises freeze capacity by what was bought', () => {
+  it('raises freeze capacity by what was bought AND switched on', () => {
     expect(freezeCapacity(emptyShop(), 1)).toBe(1);
-    expect(freezeCapacity({ ...emptyShop(), owned: ['freeze-slot', 'freeze-slot'] }, 1)).toBe(3);
+    const owned = { ...emptyShop(), owned: ['freeze-slot', 'freeze-slot'] };
+    expect(freezeCapacity(owned, 1)).toBe(1);
+    expect(freezeCapacity({ ...owned, active: ['freeze-slot'] }, 1)).toBe(3);
   });
 
   it('never raises capacity past the cap, whatever the record says', () => {
-    expect(freezeCapacity({ ...emptyShop(), owned: Array(99).fill('freeze-slot') }, 1)).toBe(
-      1 + MAX_FREEZE_SLOTS
-    );
+    expect(
+      freezeCapacity(
+        { ...emptyShop(), owned: Array(99).fill('freeze-slot'), active: ['freeze-slot'] },
+        1
+      )
+    ).toBe(1 + MAX_FREEZE_SLOTS);
   });
 
-  it('reports the extra wildcard', () => {
+  it('reports the extra wildcard only while it is switched on', () => {
     expect(hasExtraWildcard(emptyShop())).toBe(false);
-    expect(hasExtraWildcard({ ...emptyShop(), owned: ['quest-extra'] })).toBe(true);
+    const owned = { ...emptyShop(), owned: ['quest-extra'] };
+    expect(hasExtraWildcard(owned)).toBe(false);
+    expect(hasExtraWildcard({ ...owned, active: ['quest-extra'] })).toBe(true);
   });
 });
 
@@ -459,5 +471,72 @@ describe('the instruments and consumables', () => {
     // Raising STAT_RETENTION_DAYS makes already-pruned days pass `withinRetention` again,
     // and reconciliation would read each as a whole day rather than a delta.
     expect(CATALOGUE.find((i) => i.id === 'inst-ledger-rule')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Owning something and using it are separate facts
+// ---------------------------------------------------------------------------
+
+describe('switching an owned item on and off', () => {
+  const withOwned = (...ids: string[]) => ({ ...emptyShop(), owned: ids });
+
+  it('starts off, so nothing applies the moment it is paid for', () => {
+    const r = purchase(emptyShop(), rich(9999), WEEK, 'quest-extra');
+    expect(r.ok).toBe(true);
+    expect(r.shop!.active).toEqual([]);
+    expect(hasExtraWildcard(r.shop!)).toBe(false);
+  });
+
+  it('switches on and back off', () => {
+    let shop = withOwned('quest-extra');
+    shop = setActive(shop, 'quest-extra', true);
+    expect(isActive(shop, 'quest-extra')).toBe(true);
+    shop = setActive(shop, 'quest-extra', false);
+    expect(isActive(shop, 'quest-extra')).toBe(false);
+  });
+
+  it('is idempotent in both directions', () => {
+    // What lets a caller send the intended STATE rather than having to know the
+    // current one — a toggle that appends on every click would activate an item twice
+    // and need two clicks to switch off.
+    const shop = setActive(withOwned('quest-extra'), 'quest-extra', true);
+    expect(setActive(shop, 'quest-extra', true)).toBe(shop);
+    const off = setActive(shop, 'quest-extra', false);
+    expect(setActive(off, 'quest-extra', false)).toBe(off);
+    expect(off.active).toEqual([]);
+  });
+
+  it('refuses to activate something not owned', () => {
+    const shop = setActive(emptyShop(), 'quest-extra', true);
+    expect(shop.active).toEqual([]);
+  });
+
+  it('refuses cosmetics, which have equipping instead', () => {
+    // A finish that was both equipped and inactive would have no readable meaning.
+    const shop = setActive(withOwned('finish-bronze'), 'finish-bronze', true);
+    expect(shop.active).toEqual([]);
+    expect(togglable(itemById('finish-bronze')!)).toBe(false);
+  });
+
+  it('refuses consumables, which are spent rather than worn', () => {
+    const shop = setActive({ ...emptyShop(), stock: { 'boost-day': 1 } }, 'boost-day', true);
+    expect(shop.active).toEqual([]);
+    expect(togglable(itemById('boost-day')!)).toBe(false);
+  });
+
+  it('marks the permanents that should carry a switch', () => {
+    expect(togglable(itemById('freeze-slot')!)).toBe(true);
+    expect(togglable(itemById('quest-extra')!)).toBe(true);
+    expect(togglable(itemById('inst-loupe')!)).toBe(true);
+  });
+
+  it('keeps the switch when something else is bought', () => {
+    let shop = setActive(withOwned('quest-extra'), 'quest-extra', true);
+    const r = purchase(shop, rich(9999), WEEK, 'freeze-slot');
+    expect(r.ok).toBe(true);
+    shop = r.shop!;
+    expect(isActive(shop, 'quest-extra')).toBe(true);
+    expect(isActive(shop, 'freeze-slot')).toBe(false);
   });
 });

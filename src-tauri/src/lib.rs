@@ -206,6 +206,135 @@ fn read_snapshot(app: tauri::AppHandle, previous: bool) -> Result<String, String
     std::fs::read_to_string(&path).map_err(|e| format!("could not read {}: {e}", path.display()))
 }
 
+/// Hand a link from a note to the default browser.
+///
+/// The webview must never navigate. It is the app — following a link inside it would
+/// replace the calendar with a web page and there is no back button to return from,
+/// so the only safe way to open anything is to give it to the operating system and
+/// stay put.
+///
+/// `vet` is the whole security boundary and it is a strict allowlist, not a filter of
+/// known-bad. `open` will happily launch an application, open a document, or act on a
+/// custom scheme registered by anything installed, so the question is not "is this
+/// string dangerous" but "is this one of the two things we meant to support". Notes
+/// are free text and can be pasted from anywhere, which makes them exactly the kind of
+/// input that should not reach a shell-adjacent API unexamined.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let target = vet(&url)?;
+    std::process::Command::new("open")
+        // Stops a URL from being read as an option. The scheme check already makes a
+        // leading dash impossible; this holds even if that check is ever loosened.
+        .arg("--")
+        .arg(&target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open the link: {e}"))
+}
+
+/// Accept `http://` and `https://` URLs, and nothing else whatsoever.
+fn vet(url: &str) -> Result<String, String> {
+    const MAX: usize = 2048;
+    let trimmed = url.trim();
+
+    if trimmed.len() > MAX {
+        return Err("that link is too long to open".into());
+    }
+
+    // Whitespace and control characters cannot appear in a URL, and their presence
+    // means the string is not one thing — it is a line that happens to start like a
+    // link. Refuse rather than opening the part before the space.
+    if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("that link contains spaces or control characters".into());
+    }
+
+    // Case-insensitive on the scheme only. `HTTPS://` is a valid URL; the rest of the
+    // string is left exactly as written, because paths and query strings are
+    // case-sensitive and lowercasing them would open a different page.
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("only http and https links can be opened".into());
+    }
+
+    // A scheme with no host — "https://" alone, or "https:///path" — is not something
+    // to hand onward.
+    let rest = &trimmed[lower.find("//").map(|i| i + 2).unwrap_or(0)..];
+    if rest.is_empty() || rest.starts_with('/') {
+        return Err("that link has no address".into());
+    }
+
+    Ok(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::vet;
+
+    #[test]
+    fn accepts_ordinary_meeting_links() {
+        for url in [
+            "https://zoom.us/j/1234567890?pwd=abc",
+            "https://meet.google.com/abc-defg-hij",
+            "https://teams.microsoft.com/l/meetup-join/19%3ameeting",
+            "http://localhost:3000/standup",
+        ] {
+            assert!(vet(url).is_ok(), "rejected {url}");
+        }
+    }
+
+    #[test]
+    fn refuses_every_scheme_but_http_and_https() {
+        // The point of the allowlist. `open` acts on all of these, and a note is text
+        // that can be pasted from anywhere.
+        for url in [
+            "file:///Users/someone/.ssh/id_rsa",
+            "ftp://example.com/x",
+            "mailto:someone@example.com",
+            "zoommtg://zoom.us/join?confno=1",
+            "javascript:alert(1)",
+            "/Applications/Calculator.app",
+            "-e",
+            "",
+        ] {
+            assert!(vet(url).is_err(), "accepted {url}");
+        }
+    }
+
+    #[test]
+    fn refuses_a_line_that_merely_begins_like_a_link() {
+        assert!(vet("https://example.com and then rm -rf /").is_err());
+        assert!(vet("https://example.com\nopen -a Calculator").is_err());
+        assert!(vet("https://exa\tmple.com").is_err());
+    }
+
+    #[test]
+    fn refuses_a_scheme_with_no_host() {
+        assert!(vet("https://").is_err());
+        assert!(vet("https:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn accepts_an_uppercase_scheme_without_touching_the_path() {
+        // Paths and query strings are case-sensitive: lowercasing the whole URL would
+        // open a different page, which is a wrong answer rather than a refusal.
+        assert_eq!(
+            vet("HTTPS://example.com/CaseSensitive?T=1").unwrap(),
+            "HTTPS://example.com/CaseSensitive?T=1"
+        );
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace_rather_than_refusing_it() {
+        assert_eq!(vet("  https://example.com  ").unwrap(), "https://example.com");
+    }
+
+    #[test]
+    fn refuses_something_far_too_long() {
+        let long = format!("https://example.com/{}", "a".repeat(4096));
+        assert!(vet(&long).is_err());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -219,7 +348,11 @@ pub fn run() {
       }
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![write_snapshot, read_snapshot])
+    .invoke_handler(tauri::generate_handler![
+      write_snapshot,
+      read_snapshot,
+      open_external
+    ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

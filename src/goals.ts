@@ -6,6 +6,7 @@ import type {
   GoalOutcome,
   GoalProgress,
   WeeklyGoal,
+  WeekOutcome,
   WeekRecord,
 } from './types';
 import { addWeeks, toWeekKey } from './week';
@@ -129,6 +130,63 @@ export function weekProgress(week: WeekRecord): GoalProgress[] {
   return week.goals.map((g) => goalProgress(g, week.credits));
 }
 
+/**
+ * Count how a week's goals finished.
+ *
+ * Every goal lands in exactly one bucket, so the five always sum to `total` — which is
+ * what makes "2 of 5 missed" readable rather than needing a second figure to trust.
+ */
+export function tallyOutcomes(week: WeekRecord): WeekOutcome {
+  const tally: WeekOutcome = {
+    met: 0,
+    slipped: 0,
+    missed: 0,
+    voided: 0,
+    exceeded: 0,
+    total: 0,
+  };
+  for (const p of weekProgress(week)) {
+    tally.total++;
+    if (p.outcome === 'met') tally.met++;
+    else if (p.outcome === 'partial') tally.slipped++;
+    else if (p.outcome === 'missed') tally.missed++;
+    else if (p.outcome === 'void') tally.voided++;
+    else if (p.outcome === 'exceeded') tally.exceeded++;
+  }
+  return tally;
+}
+
+/**
+ * How a week finished: the sealed tally if it has one, otherwise counted live.
+ *
+ * ALWAYS PREFER THE SEAL. A sealed week is settled history, and recomputing it would
+ * re-judge it against whatever the scoring rules happen to be now. The live count is
+ * for the week in progress and for weeks that finished before seals existed.
+ */
+export function weekOutcome(week: WeekRecord): WeekOutcome {
+  return week.outcome ?? tallyOutcomes(week);
+}
+
+/**
+ * Finished weeks and how each ended, most recent first.
+ *
+ * This is the whole answer to "the goals reset, so where did the misses go" — they went
+ * here, at the moment the week was sealed, and nothing that happens afterwards moves
+ * them. Weeks that held no goals are dropped: an empty week is not a clean one, and
+ * padding the record with them would flatter it.
+ */
+export function outcomeHistory(
+  weeks: WeekRecord[],
+  limit = 12
+): { week: string; outcome: WeekOutcome }[] {
+  return weeks
+    .filter((w) => w.resolved === true)
+    .sort((a, b) => b.week.localeCompare(a.week))
+    .map((w) => ({ week: w.week, outcome: weekOutcome(w) }))
+    .filter((row) => row.outcome.total > 0)
+    .slice(0, limit);
+}
+
 /** Goals with work still outstanding — what the intake chips offer. */
 export function openGoals(week: WeekRecord): GoalProgress[] {
   return weekProgress(week).filter(
@@ -249,7 +307,10 @@ export function resolveElapsedWeeks(
       if (progress.goal.cadence === 'weekly') continue;
       pile = deferGoal(pile, progress, week.week);
     }
-    resolved.push({ ...week, resolved: true });
+    // Sealed with its tally. This is the only moment the week's outcome is judged —
+    // from Monday the goals are reissued at full target, so without this the misses
+    // would exist only as a recomputation of records the app keeps rewriting.
+    resolved.push({ ...week, resolved: true, outcome: tallyOutcomes(week) });
   }
 
   return { resolved, carryover: pile, changed: true };

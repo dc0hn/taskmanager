@@ -1,5 +1,13 @@
 import { memo } from 'react';
-import { ArrowLeft, ArrowRight, Plus, RotateCcw, Scan, Undo2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ListRestart,
+  Plus,
+  RotateCcw,
+  Scan,
+  Undo2,
+} from 'lucide-react';
 import type { DayMarkDef, ViewMode } from '../types';
 import { fromDateKey, toDateKey } from '../utils/time';
 import { formatMonthLong, formatWeekRangeLong } from '../week';
@@ -19,6 +27,9 @@ interface Props {
   /** Shown only when there is something incomplete to reflow. */
   canReplan: boolean;
   onRebuildFromNow: () => void;
+  /** Shown only when there is something unpinned and unfinished to clear. */
+  canUnschedule: boolean;
+  onUnschedule: () => void;
   /** How many gestures deep the undo stack is. Zero disables the control. */
   undoCount: number;
   onUndo: () => void;
@@ -46,6 +57,8 @@ function Toolbar({
   onAdd,
   canReplan,
   onRebuildFromNow,
+  canUnschedule,
+  onUnschedule,
   undoCount,
   onUndo,
   onImportMarks,
@@ -158,6 +171,17 @@ function Toolbar({
             >
               <RotateCcw size={13} strokeWidth={2} />
               Replan from now
+            </button>
+          )}
+
+          {canUnschedule && (
+            <button
+              onClick={onUnschedule}
+              title="Send everything unfinished back to the intake so the day can be planned again. Pinned entries stay exactly where they are, and so does anything already done."
+              className="btn-quiet inline-flex items-center gap-2 text-body-sm px-3 h-8"
+            >
+              <ListRestart size={13} strokeWidth={2} />
+              Clear to intake
             </button>
           )}
 

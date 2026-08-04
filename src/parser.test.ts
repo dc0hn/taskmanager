@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskLine } from './parser';
+import { parseDuration, parseTaskLine } from './parser';
 import { format12h, formatHourLabel } from './utils/time';
 
 // These tests LOCK current parser behavior (they document, not redesign it).
@@ -116,5 +116,36 @@ describe('clock labels wrap at midnight', () => {
   it('wraps a whole extra day rather than accumulating', () => {
     expect(formatHourLabel(2880)).toBe('12 AM');
     expect(formatHourLabel(2880 + 540)).toBe('9 AM');
+  });
+});
+
+describe('parseDuration', () => {
+  it('reads a bare number as minutes', () => {
+    // Accepted here but NOT in the intake line, where a stray "90" is far more
+    // likely to be part of a title than a duration.
+    expect(parseDuration('45')).toBe(45);
+    expect(parseDuration('210')).toBe(210);
+  });
+
+  it('reads the same notation the intake line accepts', () => {
+    expect(parseDuration('2h')).toBe(120);
+    expect(parseDuration('1h30m')).toBe(90);
+    expect(parseDuration('90m')).toBe(90);
+    expect(parseDuration('45min')).toBe(45);
+  });
+
+  it('accepts "1h30" without the trailing unit, which is how people type it', () => {
+    expect(parseDuration('1h30')).toBe(90);
+    expect(parseDuration('2h15')).toBe(135);
+  });
+
+  it('tolerates surrounding whitespace', () => {
+    expect(parseDuration('  90  ')).toBe(90);
+  });
+
+  it('refuses anything that is not a length', () => {
+    for (const bad of ['', 'soon', '-30', '0', 'abc', '1h30x', '9:30']) {
+      expect(parseDuration(bad), bad).toBeNull();
+    }
   });
 });

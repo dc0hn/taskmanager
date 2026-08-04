@@ -11,6 +11,7 @@ import {
   saveProgress,
   saveStreak,
   loadWeek,
+  loadShop,
 } from './storage';
 import { emptyAwards, emptyStreak } from './streaks';
 import { brassEarned, emptyProgress, reckonDay, wasOnTime } from './progress';
@@ -496,5 +497,227 @@ describe('goal direction and run round trip', () => {
     expect(g.direction).toBe('atLeast');
     expect(g.run).toBeUndefined();
     expect(g.label).toBe('Deep work');
+  });
+});
+
+describe('the sealed week outcome round trip', () => {
+  const store = (outcome: unknown) =>
+    localStorage.setItem(
+      'dp:week:2026-07-27',
+      JSON.stringify({
+        week: '2026-07-27',
+        goals: [],
+        credits: [],
+        resolved: true,
+        outcome,
+      })
+    );
+
+  const full = { met: 2, slipped: 1, missed: 3, voided: 1, exceeded: 0, total: 7 };
+
+  it('keeps a complete tally', () => {
+    store(full);
+    expect(loadWeek('2026-07-27').outcome).toEqual(full);
+  });
+
+  it('drops a tally missing any bucket rather than under-reporting the misses', () => {
+    // The failure being prevented: a partial read that keeps `met` and loses `missed`
+    // does not look broken, it looks like a good week. Absent is honest — the caller
+    // falls back to counting the record — so anything incomplete is refused whole.
+    for (const key of ['met', 'slipped', 'missed', 'voided', 'exceeded', 'total']) {
+      const partial: Record<string, number> = { ...full };
+      delete partial[key];
+      store(partial);
+      expect(loadWeek('2026-07-27').outcome, `dropped ${key}`).toBeUndefined();
+    }
+  });
+
+  it('refuses counts that are not usable numbers', () => {
+    for (const missed of ['3', -1, NaN, Infinity, null, {}]) {
+      store({ ...full, missed });
+      expect(loadWeek('2026-07-27').outcome).toBeUndefined();
+    }
+  });
+
+  it('leaves a week with no seal unmarked', () => {
+    for (const outcome of [undefined, null, 'sealed', 7, []]) {
+      store(outcome);
+      expect(loadWeek('2026-07-27').outcome).toBeUndefined();
+    }
+  });
+
+  it('rounds a fractional count rather than storing a fraction of a goal', () => {
+    store({ ...full, missed: 3.4 });
+    expect(loadWeek('2026-07-27').outcome?.missed).toBe(3);
+  });
+});
+
+describe('notes round trip', () => {
+  const storeBlock = (notes: unknown) =>
+    localStorage.setItem(
+      `dp:plan:${DAY}`,
+      JSON.stringify({
+        date: DAY,
+        tasks: [],
+        blocks: [
+          { id: 'b1', title: 'Standup', start: 540, end: 570, category: 'deep', notes },
+        ],
+      })
+    );
+
+  it('keeps a note through a save and a load', () => {
+    storeBlock('Zoom: https://zoom.us/j/123\nAsk about the Q3 numbers');
+    expect(loadPlan(DAY).blocks[0].notes).toBe(
+      'Zoom: https://zoom.us/j/123\nAsk about the Q3 numbers'
+    );
+  });
+
+  it('reads an empty or blank note as absent, never as an empty string', () => {
+    // So `hasNotes` and every truthiness check around the app agree on what "no
+    // note" means without each having to trim first.
+    for (const blank of ['', '   ', '\n\n', '\t']) {
+      storeBlock(blank);
+      expect(loadPlan(DAY).blocks[0].notes).toBeUndefined();
+    }
+  });
+
+  it('ignores a note that is not text', () => {
+    for (const bad of [42, true, {}, [], null]) {
+      storeBlock(bad);
+      expect(loadPlan(DAY).blocks[0].notes).toBeUndefined();
+    }
+  });
+
+  it('caps a note on READ, not only on write', () => {
+    // The cap has to hold on the way in as well, or a hand-edited or imported
+    // profile carries a field the app would never willingly create.
+    storeBlock('x'.repeat(5000));
+    expect(loadPlan(DAY).blocks[0].notes).toHaveLength(2000);
+  });
+
+  it('keeps a note on an unscheduled task too, so it survives being scheduled', () => {
+    localStorage.setItem(
+      `dp:plan:${DAY}`,
+      JSON.stringify({
+        date: DAY,
+        tasks: [
+          {
+            id: 't1',
+            title: 'Client call',
+            duration: 60,
+            category: 'deep',
+            priority: 'normal',
+            notes: 'https://meet.google.com/abc-defg-hij',
+          },
+        ],
+        blocks: [],
+      })
+    );
+    expect(loadPlan(DAY).tasks[0].notes).toBe('https://meet.google.com/abc-defg-hij');
+  });
+});
+
+describe('keepWhole round trip', () => {
+  const storeTask = (keepWhole: unknown) =>
+    localStorage.setItem(
+      `dp:plan:${DAY}`,
+      JSON.stringify({
+        date: DAY,
+        tasks: [
+          {
+            id: 't1',
+            title: 'Workshop',
+            duration: 180,
+            category: 'deep',
+            priority: 'normal',
+            keepWhole,
+          },
+        ],
+        blocks: [],
+      })
+    );
+
+  it('keeps the decision', () => {
+    storeTask(true);
+    expect(loadPlan(DAY).tasks[0].keepWhole).toBe(true);
+  });
+
+  it('reads anything but true as absent, never as false', () => {
+    // Absent and false mean the same thing to the scheduler. Writing the false would
+    // put a field on every task ever saved to record a decision nobody made.
+    for (const v of [false, undefined, 'yes', 1, null, {}]) {
+      storeTask(v);
+      expect(loadPlan(DAY).tasks[0].keepWhole).toBeUndefined();
+    }
+  });
+
+  it('survives on a block, which is what a rebuild reads', () => {
+    localStorage.setItem(
+      `dp:plan:${DAY}`,
+      JSON.stringify({
+        date: DAY,
+        tasks: [],
+        blocks: [
+          {
+            id: 'b1',
+            title: 'Workshop',
+            start: 540,
+            end: 720,
+            category: 'deep',
+            keepWhole: true,
+          },
+        ],
+      })
+    );
+    expect(loadPlan(DAY).blocks[0].keepWhole).toBe(true);
+  });
+});
+
+describe('the active set round trip', () => {
+  const storeShop = (record: Record<string, unknown>) =>
+    localStorage.setItem('dp:shop:v1', JSON.stringify(record));
+
+  it('keeps a switch that is on', () => {
+    storeShop({ owned: ['quest-extra'], active: ['quest-extra'] });
+    expect(loadShop('2026-07-30').active).toEqual(['quest-extra']);
+  });
+
+  it('drops an active item that is not owned', () => {
+    // Read as an allowlist derived from `owned`, so a hand-edited record cannot
+    // switch on something that was never bought.
+    storeShop({ owned: [], active: ['quest-extra'] });
+    expect(loadShop('2026-07-30').active).toEqual([]);
+  });
+
+  it('drops an active id that is a cosmetic or a consumable', () => {
+    storeShop({ owned: ['finish-bronze'], active: ['finish-bronze'] });
+    expect(loadShop('2026-07-30').active).toEqual([]);
+    storeShop({ owned: ['boost-day'], active: ['boost-day'] });
+    expect(loadShop('2026-07-30').active).toEqual([]);
+  });
+
+  it('drops an unknown id rather than carrying it', () => {
+    storeShop({ owned: ['quest-extra'], active: ['nonsense', 'quest-extra'] });
+    expect(loadShop('2026-07-30').active).toEqual(['quest-extra']);
+  });
+
+  it('never lists the same item twice', () => {
+    storeShop({ owned: ['quest-extra'], active: ['quest-extra', 'quest-extra'] });
+    expect(loadShop('2026-07-30').active).toEqual(['quest-extra']);
+  });
+
+  it('reads a profile written before switches existed as everything off', () => {
+    // The deliberate consequence: an upgrade bought earlier stops applying until it
+    // is switched on. That is the point of the change, not a migration failure — but
+    // it has to be the reliable outcome rather than an accident of key order.
+    storeShop({ owned: ['quest-extra', 'freeze-slot'], stock: {}, equipped: {} });
+    expect(loadShop('2026-07-30').active).toEqual([]);
+  });
+
+  it('ignores an active field that is not a list', () => {
+    for (const bad of ['quest-extra', 7, {}, null]) {
+      storeShop({ owned: ['quest-extra'], active: bad });
+      expect(loadShop('2026-07-30').active).toEqual([]);
+    }
   });
 });

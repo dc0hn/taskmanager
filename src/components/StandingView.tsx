@@ -77,6 +77,8 @@ interface Props {
   onBuy: (itemId: string) => void;
   onEquipItem: (itemId: string) => void;
   onUnequipSlot: (slot: 'finish' | 'meter' | 'title' | 'frame') => void;
+  onToggleActive: (itemId: string, on: boolean) => void;
+  onUseItem: (itemId: string) => void;
   previousWeekKey: string;
   codex: InsightStatus[];
   onReadInsight: (id: string) => void;
@@ -127,6 +129,8 @@ export default function StandingView({
   onBuy,
   onEquipItem,
   onUnequipSlot,
+  onToggleActive,
+  onUseItem,
   previousWeekKey,
   codex,
   onReadInsight,
@@ -493,6 +497,8 @@ export default function StandingView({
             onBuy={onBuy}
             onEquip={onEquipItem}
             onUnequip={onUnequipSlot}
+            onToggleActive={onToggleActive}
+            onUseItem={onUseItem}
           />
         </Foldable>
 

@@ -22,6 +22,7 @@ import type {
   WeeklyGoal,
   WeekRecord,
 } from '../types';
+import type { WeekOutcome } from '../types';
 import type { WeekReview } from '../goals';
 import {
   carryoverByCategory,
@@ -55,6 +56,8 @@ interface Props {
   carryover: CarryoverItem[];
   categories: CategoryDef[];
   review: WeekReview;
+  /** Finished weeks and how each ended, most recent first. */
+  history: { week: string; outcome: WeekOutcome }[];
   /** This month's completion per goal id, for the small month gauge. */
   monthRatios: Record<string, { ratio: number; done: number; target: number }>;
   onAddGoal: (goal: WeeklyGoal) => void;
@@ -72,6 +75,7 @@ export default function GoalsView({
   carryover,
   categories,
   review,
+  history,
   monthRatios,
   onAddGoal,
   onRemoveGoal,
@@ -603,8 +607,94 @@ export default function GoalsView({
             )}
           </div>
         </Section>
+
+        {/* ------------- the record ------------- */}
+        {history.length > 0 && (
+          <Section
+            title="The record"
+            count={history.length}
+            hint="Goals reset every Monday. What they came to does not."
+          >
+            <ul className="flex flex-col">
+              {history.map((row) => (
+                <RecordRow
+                  key={row.week}
+                  week={row.week}
+                  outcome={row.outcome}
+                  onOpen={() => onWeekChange(row.week)}
+                />
+              ))}
+            </ul>
+          </Section>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One finished week, and what it came to.
+ *
+ * The bar is the point of this row. A column of numbers makes you read every line to
+ * find the bad weeks; proportion makes them obvious at a glance, and the run of them
+ * side by side is the thing worth seeing — one missed goal is noise, the same goal
+ * missed five weeks running is the record telling you something.
+ *
+ * Every bucket is drawn, including the ones that are not failures, because a bar that
+ * showed only met and missed would silently rescale itself whenever a goal was stood
+ * down and make a lighter week look like a stronger one.
+ */
+function RecordRow({
+  week,
+  outcome,
+  onOpen,
+}: {
+  week: string;
+  outcome: WeekOutcome;
+  onOpen: () => void;
+}) {
+  const { met, slipped, missed, voided, exceeded, total } = outcome;
+  const segments = [
+    { n: met, color: 'var(--good)' },
+    { n: slipped, color: 'var(--signal)' },
+    { n: missed, color: 'var(--bad)' },
+    { n: exceeded, color: 'var(--bad)' },
+    { n: voided, color: 'var(--bone-3)' },
+  ].filter((s) => s.n > 0);
+
+  return (
+    <li>
+      <button
+        onClick={onOpen}
+        className="w-full flex items-center gap-3 py-[7px] px-1 rounded-md text-left transition-colors hover:bg-chassis-2"
+      >
+        <span className="font-mono text-[11px] text-ink-2 tnum w-[92px] shrink-0">
+          {formatWeekRange(week)}
+        </span>
+        <span
+          className="flex-1 h-[6px] rounded-full overflow-hidden flex min-w-[60px]"
+          style={{ background: 'var(--chassis-3)' }}
+        >
+          {segments.map((s, i) => (
+            <span
+              key={i}
+              style={{ width: `${(s.n / total) * 100}%`, background: s.color }}
+            />
+          ))}
+        </span>
+        {/* The count reads "2 missed", never "3/5 met" — a reset erases the progress
+            bar, so the number worth keeping is the one that says what slipped. */}
+        <span className="font-mono text-[11px] tnum w-[74px] shrink-0 text-right">
+          {missed + slipped > 0 ? (
+            <span style={{ color: 'var(--bad)' }}>
+              {missed + slipped} missed
+            </span>
+          ) : (
+            <span style={{ color: 'var(--good)' }}>all met</span>
+          )}
+        </span>
+      </button>
+    </li>
   );
 }
 

@@ -142,6 +142,11 @@ function splitLongDeep(tasks: Task[], rules: CategoryRules): Task[] {
     if (
       rules.kindOf(t.category) === 'focus' &&
       t.fixedTime == null &&
+      // An explicit decision to keep the work in one piece. The 90-minute envelope is
+      // a good default and a bad law: a workshop, a shoot or a three-hour exam cannot
+      // be cut in half, and splitting one produces a schedule that is wrong rather
+      // than merely unfashionable.
+      t.keepWhole !== true &&
       t.duration >= DEEP_SPLIT_THRESHOLD
     ) {
       const n = Math.ceil(t.duration / DEEP_CHUNK_MAX);
@@ -261,6 +266,8 @@ export function buildSchedule(
       category: t.category,
       goalId: t.goalId,
       templateId: t.templateId,
+      notes: t.notes,
+      keepWhole: t.keepWhole,
     });
     const bufStart = Math.max(workingStart, s - BUFFER_PRE);
     const bufEnd = Math.min(workingEnd, e + BUFFER_POST);
@@ -335,6 +342,8 @@ export function buildSchedule(
       category: t.category,
       goalId: t.goalId,
       templateId: t.templateId,
+      notes: t.notes,
+      keepWhole: t.keepWhole,
     });
     queue.splice(queue.indexOf(t), 1);
 
@@ -416,6 +425,8 @@ export function buildSchedule(
         category: t.category,
         goalId: t.goalId,
         templateId: t.templateId,
+        notes: t.notes,
+        keepWhole: t.keepWhole,
       });
       cursor += t.duration;
       if (rules.kindOf(t.category) === 'rest') {

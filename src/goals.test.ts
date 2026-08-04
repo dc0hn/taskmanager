@@ -22,6 +22,9 @@ import {
   goalRunKey,
   goalRunPayouts,
   goalRunXp,
+  outcomeHistory,
+  tallyOutcomes,
+  weekOutcome,
 } from './goals';
 import { DEFAULT_CATEGORIES } from './types';
 import type { Block, CarryoverItem, GoalCredit, WeeklyGoal, WeekRecord } from './types';
@@ -894,5 +897,148 @@ describe('run goals', () => {
 
   it('scales the payout with the target', () => {
     expect(goalRunXp(2)).toBeLessThan(goalRunXp(6));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Monday reset, and what survives it
+//
+// Weekly goals are reissued at full target every Monday, which means the live figures
+// are DESIGNED to lose last week's progress. The record is the only place a miss
+// continues to exist, so these guard the seal rather than the reset.
+// ---------------------------------------------------------------------------
+
+describe('tallyOutcomes', () => {
+  it('puts every goal in exactly one bucket', () => {
+    const w = week({
+      goals: [
+        weekly({ id: 'a' }),
+        weekly({ id: 'b' }),
+        weekly({ id: 'c', voided: true }),
+        weekly({ id: 'd', direction: 'atMost', target: 1 }),
+      ],
+      credits: [
+        credit({ goalId: 'a', blockId: 'a1', date: '2026-07-06' }),
+        credit({ goalId: 'a', blockId: 'a2', date: '2026-07-07' }),
+        credit({ goalId: 'a', blockId: 'a3', date: '2026-07-08' }),
+        credit({ goalId: 'b', blockId: 'b1', date: '2026-07-06' }),
+        credit({ goalId: 'd', blockId: 'd1', date: '2026-07-06' }),
+        credit({ goalId: 'd', blockId: 'd2', date: '2026-07-07' }),
+      ],
+    });
+    const t = tallyOutcomes(w);
+    expect(t).toEqual({ met: 1, slipped: 1, missed: 0, voided: 1, exceeded: 1, total: 4 });
+    expect(t.met + t.slipped + t.missed + t.voided + t.exceeded).toBe(t.total);
+  });
+
+  it('counts a goal with no credits as missed', () => {
+    expect(tallyOutcomes(week({ goals: [weekly()] })).missed).toBe(1);
+  });
+});
+
+describe('the sealed record', () => {
+  it('writes the tally when the week is resolved', () => {
+    const w = week({ week: W1, goals: [weekly({ id: 'a' }), weekly({ id: 'b' })] });
+    const { resolved } = resolveElapsedWeeks(NOW_WEEK, [w], []);
+    expect(resolved[0].outcome).toEqual({
+      met: 0, slipped: 0, missed: 2, voided: 0, exceeded: 0, total: 2,
+    });
+  });
+
+  it('keeps the miss even after the goal is met in a later week', () => {
+    // The actual complaint this guards: Monday reissues the goal at full target, it is
+    // met this time, and the week it was missed in must go on saying so.
+    const missedWeek = week({ week: W1, goals: [weekly()] });
+    const { resolved } = resolveElapsedWeeks(W2, [missedWeek], []);
+    const sealed = resolved[0];
+
+    const nextWeek = week({
+      week: W2,
+      goals: [weekly()],
+      credits: [
+        credit({ blockId: 'x1', date: '2026-07-13' }),
+        credit({ blockId: 'x2', date: '2026-07-14' }),
+        credit({ blockId: 'x3', date: '2026-07-15' }),
+      ],
+    });
+    expect(tallyOutcomes(nextWeek).met).toBe(1);
+    expect(weekOutcome(sealed).missed).toBe(1);
+  });
+
+  it('prefers the seal over recounting, so history cannot be re-judged', () => {
+    // A sealed week whose credits have since gone. Recounting would call it missed;
+    // the seal remembers that it was met.
+    const w = week({
+      week: W1,
+      goals: [weekly()],
+      credits: [],
+      resolved: true,
+      outcome: { met: 1, slipped: 0, missed: 0, voided: 0, exceeded: 0, total: 1 },
+    });
+    expect(weekOutcome(w).met).toBe(1);
+    expect(tallyOutcomes(w).missed).toBe(1);
+  });
+
+  it('falls back to counting for weeks sealed before outcomes existed', () => {
+    const w = week({ week: W1, goals: [weekly()], resolved: true });
+    expect(weekOutcome(w)).toEqual({
+      met: 0, slipped: 0, missed: 1, voided: 0, exceeded: 0, total: 1,
+    });
+  });
+
+  it('is idempotent — resolving twice does not change the tally', () => {
+    const w = week({ week: W1, goals: [weekly()] });
+    const first = resolveElapsedWeeks(NOW_WEEK, [w], []);
+    const second = resolveElapsedWeeks(NOW_WEEK, first.resolved, []);
+    expect(second.changed).toBe(false);
+    expect(first.resolved[0].outcome).toEqual({
+      met: 0, slipped: 0, missed: 1, voided: 0, exceeded: 0, total: 1,
+    });
+  });
+});
+
+describe('outcomeHistory', () => {
+  it('lists resolved weeks most recent first', () => {
+    const weeks = [W1, W2, W3].map((k) =>
+      week({
+        week: k,
+        goals: [weekly()],
+        resolved: true,
+        outcome: { met: 1, slipped: 0, missed: 0, voided: 0, exceeded: 0, total: 1 },
+      })
+    );
+    expect(outcomeHistory(weeks).map((r) => r.week)).toEqual([W3, W2, W1]);
+  });
+
+  it('omits the week in progress', () => {
+    const done = week({
+      week: W1,
+      goals: [weekly()],
+      resolved: true,
+      outcome: { met: 0, slipped: 0, missed: 1, voided: 0, exceeded: 0, total: 1 },
+    });
+    const live = week({ week: NOW_WEEK, goals: [weekly()] });
+    expect(outcomeHistory([done, live]).map((r) => r.week)).toEqual([W1]);
+  });
+
+  it('omits weeks that held no goals, rather than flattering the record with them', () => {
+    const empty = week({ week: W1, resolved: true, outcome: {
+      met: 0, slipped: 0, missed: 0, voided: 0, exceeded: 0, total: 0,
+    } });
+    const real = week({ week: W2, goals: [weekly()], resolved: true, outcome: {
+      met: 0, slipped: 0, missed: 1, voided: 0, exceeded: 0, total: 1,
+    } });
+    expect(outcomeHistory([empty, real]).map((r) => r.week)).toEqual([W2]);
+  });
+
+  it('caps the list without disturbing the order', () => {
+    const weeks = ['2026-01-05', '2026-01-12', '2026-01-19'].map((k) =>
+      week({ week: k, goals: [weekly()], resolved: true, outcome: {
+        met: 0, slipped: 0, missed: 1, voided: 0, exceeded: 0, total: 1,
+      } })
+    );
+    expect(outcomeHistory(weeks, 2).map((r) => r.week)).toEqual([
+      '2026-01-19', '2026-01-12',
+    ]);
   });
 });

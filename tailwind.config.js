@@ -152,11 +152,30 @@ export default {
           '0%, 100%': { opacity: '0.5', transform: 'scale(1)' },
           '50%': { opacity: '0.12', transform: 'scale(2.2)' },
         },
+        /*
+         * The boot sequence's two primitives. Both are STEPPED rather than eased: an
+         * 8-bit mark is struck or it is not, and a rule is drawn in cells. A fade here
+         * would read as a modern splash screen wearing pixel art.
+         */
+        bootCell: {
+          from: { opacity: '0' },
+          to: { opacity: '1' },
+        },
+        bootRule: {
+          from: { transform: 'scaleX(0)' },
+          to: { transform: 'scaleX(1)' },
+        },
       },
 
       animation: {
         signalPulse: 'signalPulse 2.8s cubic-bezier(0.4,0,0.6,1) infinite',
         nowPulse: 'signalPulse 2.8s cubic-bezier(0.4,0,0.6,1) infinite',
+        // Declared as utilities rather than written inline, because Tailwind only emits
+        // the @keyframes a generated class actually references — an inline `animation:`
+        // shorthand would have been purged and the boot sequence would simply not run.
+        // Each element sets its own `animationDelay`; the rest is shared.
+        bootCell: 'bootCell 1ms steps(1, end) both',
+        bootRule: 'bootRule 260ms steps(8, end) both',
       },
     },
   },

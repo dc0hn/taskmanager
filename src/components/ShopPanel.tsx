@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { ShopKind, ShopState, Offer, Unavailable } from '../shop';
-import { itemById, newThisWeek } from '../shop';
+import { isActive, itemById, newThisWeek, togglable } from '../shop';
 import { motion, useReducedMotion } from 'framer-motion';
 import { DUR } from '../utils/motion';
 import BadgeGlyph from './pixel/BadgeGlyph';
@@ -39,6 +39,16 @@ const KIND_BLURB: Record<ShopKind, string> = {
 
 const KIND_ORDER: ShopKind[] = ['utility', 'quest', 'booster', 'cosmetic'];
 
+/**
+ * Consumables that can actually be spent today.
+ *
+ * An allowlist rather than "every consumable", and it is deliberately honest: several
+ * items in the catalogue have no effect wired to them yet, and showing a USE button
+ * that silently does nothing would be worse than showing none. When one of them gains
+ * an effect, it gets added here and to `handleUseItem` together.
+ */
+const USABLE = new Set(['freeze-refill', 'boost-day']);
+
 function reasonText(offer: Offer, brass: number): string {
   const map: Record<Unavailable, string> = {
     owned: 'owned',
@@ -62,6 +72,8 @@ interface Props {
   onBuy: (itemId: string) => void;
   onEquip: (itemId: string) => void;
   onUnequip: (slot: 'finish' | 'meter' | 'title' | 'frame') => void;
+  onToggleActive: (itemId: string, on: boolean) => void;
+  onUseItem: (itemId: string) => void;
 }
 
 function ShopPanel({
@@ -74,6 +86,8 @@ function ShopPanel({
   onBuy,
   onEquip,
   onUnequip,
+  onToggleActive,
+  onUseItem,
 }: Props) {
   const fresh = useMemo(
     () => newThisWeek(weekKey, previousWeekKey),
@@ -181,8 +195,12 @@ function ShopPanel({
                     offer.item.slot != null &&
                     shop.equipped[offer.item.slot] === offer.item.id
                   }
+                  active={isActive(shop, offer.item.id)}
+                  usable={USABLE.has(offer.item.id)}
                   onBuy={onBuy}
                   onEquip={onEquip}
+                  onToggleActive={onToggleActive}
+                  onUseItem={onUseItem}
                 />
               ))}
             </div>
@@ -258,17 +276,27 @@ function ShopTile({
   offer,
   brass,
   equipped,
+  active,
+  usable,
   onBuy,
   onEquip,
+  onToggleActive,
+  onUseItem,
 }: {
   offer: Offer;
   brass: number;
   equipped: boolean;
+  active: boolean;
+  /** Whether this consumable has an effect that can actually be triggered. */
+  usable: boolean;
   onBuy: (id: string) => void;
   onEquip: (id: string) => void;
+  onToggleActive: (id: string, on: boolean) => void;
+  onUseItem: (id: string) => void;
 }) {
   const { item, canBuy, owned, held } = offer;
   const isConsumable = item.consumable === true;
+  const switchable = owned && togglable(item);
 
   return (
     <div
@@ -328,6 +356,20 @@ function ShopTile({
           >
             BUY
           </button>
+        ) : switchable ? (
+          <Switch
+            on={active}
+            label={item.name}
+            onChange={(next) => onToggleActive(item.id, next)}
+          />
+        ) : isConsumable && held > 0 && usable ? (
+          <button
+            onClick={() => onUseItem(item.id)}
+            className="btn-quiet font-mono px-2 h-6"
+            style={{ fontSize: 10, letterSpacing: '0.08em' }}
+          >
+            USE
+          </button>
         ) : owned && item.slot && !equipped ? (
           <button
             onClick={() => onEquip(item.id)}
@@ -343,6 +385,55 @@ function ShopTile({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * An on/off switch for something owned.
+ *
+ * A real switch rather than a button that says ON or OFF, because the two states have
+ * to be distinguishable without reading — this sits in a list where most rows have no
+ * switch at all, and a row of words all the same size is exactly where an off item
+ * gets mistaken for an on one.
+ *
+ * The knob is positioned, not animated by layout, so it stays put under
+ * `prefers-reduced-motion`; the transition is a plain CSS one on `left` and colour.
+ */
+function Switch({
+  on,
+  label,
+  onChange,
+}: {
+  on: boolean;
+  label: string;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={`${label} — ${on ? 'in use' : 'not in use'}`}
+      title={on ? 'In use — click to switch off' : 'Owned but off — click to switch on'}
+      onClick={() => onChange(!on)}
+      className="relative shrink-0 rounded-full transition-colors"
+      style={{
+        width: 30,
+        height: 16,
+        background: on ? 'var(--signal)' : 'var(--chassis-4)',
+        border: `1px solid ${on ? 'var(--signal-line)' : 'var(--rule-3)'}`,
+      }}
+    >
+      <span
+        className="absolute rounded-full transition-all"
+        style={{
+          width: 10,
+          height: 10,
+          top: 2,
+          left: on ? 17 : 2,
+          background: on ? 'var(--action-ink)' : 'var(--bone-3)',
+        }}
+      />
+    </button>
   );
 }
 

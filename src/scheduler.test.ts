@@ -230,3 +230,140 @@ describe('splitting long focus work loses no minutes (S2)', () => {
     }
   });
 });
+
+describe('notes survive scheduling', () => {
+  const NOTE = 'https://meet.google.com/abc-defg-hij';
+
+  it('carries a note onto a flexible block', () => {
+    const { blocks } = buildSchedule(
+      [task({ duration: 60, category: 'deep', notes: NOTE })],
+      DAY_START,
+      DAY_END
+    );
+    expect(real(blocks)[0].notes).toBe(NOTE);
+  });
+
+  it('carries a note onto a fixed-time anchor', () => {
+    // A fixed-time entry is exactly the one most likely to BE a meeting, so this is
+    // the path the feature exists for.
+    const { blocks } = buildSchedule(
+      [task({ duration: 30, category: 'admin', fixedTime: 600, notes: NOTE })],
+      DAY_START,
+      DAY_END
+    );
+    expect(real(blocks).find((b) => b.start === 600)?.notes).toBe(NOTE);
+  });
+
+  it('gives every chunk of a split task the same note', () => {
+    // A 200-minute focus task becomes three blocks. The dial-in belongs on all of
+    // them — coming back after lunch and finding the link only on the first chunk
+    // would be the feature failing at precisely the moment it is wanted.
+    const { blocks } = buildSchedule(
+      [task({ duration: 200, category: 'deep', notes: NOTE })],
+      DAY_START,
+      DAY_END
+    );
+    const chunks = real(blocks);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) expect(c.notes).toBe(NOTE);
+  });
+
+  it('leaves a task without notes alone rather than inventing an empty one', () => {
+    const { blocks } = buildSchedule([task({ duration: 60 })], DAY_START, DAY_END);
+    expect(real(blocks)[0].notes).toBeUndefined();
+  });
+
+  it('never puts a note on a block the scheduler invented', () => {
+    // Breaks and the shutdown ritual are the scheduler's bookkeeping. A note
+    // leaking onto one would attach a meeting link to a block nobody created.
+    const { blocks } = buildSchedule(
+      [task({ duration: 200, category: 'deep', notes: NOTE })],
+      DAY_START,
+      DAY_END
+    );
+    for (const b of autos(blocks)) expect(b.notes).toBeUndefined();
+  });
+});
+
+describe('an explicitly given duration', () => {
+  it('splits long focus work by default, as it always has', () => {
+    // The baseline the opt-out is measured against. If this ever stops being true,
+    // the control below is changing something other than what it says.
+    const { blocks } = buildSchedule(
+      [task({ duration: 180, category: 'deep' })],
+      DAY_START,
+      DAY_END
+    );
+    expect(real(blocks).length).toBeGreaterThan(1);
+  });
+
+  it('places it as one block of exactly that length when kept whole', () => {
+    const { blocks } = buildSchedule(
+      [task({ duration: 180, category: 'deep', keepWhole: true })],
+      DAY_START,
+      DAY_END
+    );
+    const placed = real(blocks);
+    expect(placed).toHaveLength(1);
+    expect(placed[0].end - placed[0].start).toBe(180);
+  });
+
+  it('leaves the title alone — no "(1/2)" on something never split', () => {
+    const { blocks } = buildSchedule(
+      [task({ title: 'Workshop', duration: 240, category: 'deep', keepWhole: true })],
+      DAY_START,
+      DAY_END
+    );
+    expect(real(blocks)[0].title).toBe('Workshop');
+  });
+
+  it('honours an odd length exactly rather than snapping it', () => {
+    // The presets are 15/30/60/90/120. The whole point of free entry is that 25 and
+    // 210 are sayable, so neither may be rounded to something tidier.
+    for (const duration of [25, 47, 210]) {
+      const { blocks } = buildSchedule(
+        [task({ duration, category: 'deep', keepWhole: true })],
+        DAY_START,
+        DAY_END
+      );
+      const placed = real(blocks)[0];
+      expect(placed.end - placed.start, `${duration}m`).toBe(duration);
+    }
+  });
+
+  it('carries the decision onto the block, so a rebuild cannot undo it', () => {
+    // "Rebuild from now" turns blocks back into tasks and schedules them again. If
+    // the flag stopped at the Task, a three-hour block would come back as two chunks
+    // the first time the day was rearranged.
+    const { blocks } = buildSchedule(
+      [task({ duration: 180, category: 'deep', keepWhole: true })],
+      DAY_START,
+      DAY_END
+    );
+    expect(real(blocks)[0].keepWhole).toBe(true);
+  });
+
+  it('changes nothing for work that would not have been split anyway', () => {
+    // Shallow work, and short focus work, are untouched by chunking — so the flag
+    // must be inert rather than quietly meaning something else there.
+    const plain = buildSchedule([task({ duration: 60, category: 'deep' })], DAY_START, DAY_END);
+    const whole = buildSchedule(
+      [task({ duration: 60, category: 'deep', keepWhole: true })],
+      DAY_START,
+      DAY_END
+    );
+    expect(real(whole.blocks).map((b) => b.end - b.start)).toEqual(
+      real(plain.blocks).map((b) => b.end - b.start)
+    );
+  });
+
+  it('overflows rather than truncating when the day cannot hold it', () => {
+    // The one honest failure. A block that will not fit must be reported, never
+    // silently shortened to whatever was free — that would be the app deciding the
+    // workshop is ninety minutes after all.
+    const t = task({ duration: 600, category: 'deep', keepWhole: true });
+    const { blocks, overflow } = buildSchedule([t], DAY_START, DAY_START + 120);
+    expect(overflow).toContain(t);
+    expect(real(blocks)).toHaveLength(0);
+  });
+});

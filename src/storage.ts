@@ -1,4 +1,9 @@
-import { DEFAULT_CATEGORIES, DEFAULT_DAY_MARKS, DEFAULT_SETTINGS } from './types';
+import {
+  DEFAULT_CATEGORIES,
+  DEFAULT_DAY_MARKS,
+  DEFAULT_SETTINGS,
+  MAX_NOTE_LENGTH,
+} from './types';
 import type {
   AwardLedger,
   Block,
@@ -24,13 +29,20 @@ import type {
   Task,
   UserProgress,
   WeeklyGoal,
+  WeekOutcome,
   WeekRecord,
 } from './types';
 import { uid } from './utils/id';
 import { emptyProgress } from './progress';
 import { DAY_END } from './reflow';
 import { emptyAwards, emptyStreak } from './streaks';
-import { emptyShop, itemById, pruneBoostedDates, type ShopState } from './shop';
+import {
+  emptyShop,
+  itemById,
+  pruneBoostedDates,
+  togglable,
+  type ShopState,
+} from './shop';
 import type { Commission } from './commissions';
 import { isSeasonKey, seasonRange, type SeasonRecord } from './seasons';
 import { characterById } from './characters';
@@ -167,7 +179,26 @@ function normalizeTask(r: unknown): Task | null {
     priority: t.priority === 'high' ? 'high' : 'normal',
     goalId: str(t.goalId) || undefined,
     templateId: str(t.templateId) || undefined,
+    notes: normalizeNotes(t.notes),
+    // Absent, not false, when unset. `keepWhole: false` and no flag at all mean the
+    // same thing to the scheduler, and writing the false would put a field on every
+    // task ever saved to record a decision nobody made.
+    keepWhole: t.keepWhole === true ? true : undefined,
   };
+}
+
+/**
+ * A note, trimmed of trailing blanks and capped.
+ *
+ * Capped on READ as well as on write, because the cap is what stops a hand-edited or
+ * imported profile from carrying a field the app will never willingly create. Empty
+ * becomes absent rather than an empty string, so `hasNotes` and every truthiness check
+ * around the app agree on what "no note" means without each having to trim first.
+ */
+function normalizeNotes(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const text = raw.replace(/\s+$/, '').slice(0, MAX_NOTE_LENGTH);
+  return text.trim() ? text : undefined;
 }
 
 function normalizeBlock(r: unknown): Block | null {
@@ -202,6 +233,8 @@ function normalizeBlock(r: unknown): Block | null {
     completedAt: isFiniteNum(b.completedAt) && b.completedAt >= 0 ? b.completedAt : undefined,
     priority: b.priority === 'high' ? 'high' : undefined,
     moves: isFiniteNum(b.moves) && b.moves > 0 ? Math.floor(b.moves) : undefined,
+    notes: normalizeNotes(b.notes),
+    keepWhole: b.keepWhole === true ? true : undefined,
   };
 }
 
@@ -451,7 +484,37 @@ export function loadWeek(weekKey: string): WeekRecord {
     // one happens to sit at index zero.
     character: characterById(str(parsed.character)) ? str(parsed.character) : undefined,
     draws: normalizeDraws(parsed.draws),
+    outcome: normalizeOutcome(parsed.outcome),
   };
+}
+
+/**
+ * A sealed outcome tally, or nothing.
+ *
+ * All-or-nothing like `normalizeDraws`, and for a sharper reason: a partly-read tally
+ * would report fewer misses than the week actually held, and it would look entirely
+ * plausible doing it. Absent is honest — callers fall back to counting the record —
+ * whereas a half-read seal is a wrong answer nobody can spot.
+ */
+function normalizeOutcome(raw: unknown): WeekOutcome | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const count = (v: unknown): number | null =>
+    isFiniteNum(v) && v >= 0 ? Math.round(v) : null;
+
+  const met = count(o.met);
+  const slipped = count(o.slipped);
+  const missed = count(o.missed);
+  const voided = count(o.voided);
+  const exceeded = count(o.exceeded);
+  const total = count(o.total);
+  if (
+    met === null || slipped === null || missed === null ||
+    voided === null || exceeded === null || total === null
+  ) {
+    return undefined;
+  }
+  return { met, slipped, missed, voided, exceeded, total };
 }
 
 /**
@@ -963,10 +1026,26 @@ export function loadShop(today = toDateKey(new Date())): ShopState {
     }
   }
 
+  // Only what is genuinely owned and genuinely switchable. Read this way round — an
+  // allowlist derived from `owned` — a hand-edited record cannot activate an item that
+  // was never bought, and an item that stops being togglable stops being active
+  // without needing a migration.
+  const active: string[] = [];
+  if (Array.isArray(parsed.active)) {
+    for (const v of parsed.active) {
+      if (typeof v !== 'string' || active.includes(v)) continue;
+      if (!owned.includes(v)) continue;
+      const item = itemById(v);
+      if (!item || !togglable(item)) continue;
+      active.push(v);
+    }
+  }
+
   return {
     owned,
     stock,
     equipped,
+    active,
     // Trimmed by date, never by count — see `pruneBoostedDates`. A length cap here
     // was silently un-boosting the oldest days, and reconciliation then took their
     // doubled XP back out of the lifetime total.

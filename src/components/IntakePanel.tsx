@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Clock, Flag, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import { Clock, Flag, Lock, Pencil, Plus, Scissors, Sparkles, Trash2, X } from 'lucide-react';
 import type {
   CategoryDef,
   GoalProgress,
@@ -8,8 +8,14 @@ import type {
   Task,
   WeeklyGoal,
 } from '../types';
+import { MAX_NOTE_LENGTH } from '../types';
 import type { TemplateStatus } from '../recurrence';
-import { buildCategoryTokens, DURATION_PRESETS, parseTaskLine } from '../parser';
+import {
+  buildCategoryTokens,
+  DURATION_PRESETS,
+  parseDuration,
+  parseTaskLine,
+} from '../parser';
 import { categoryColors, colorsFor } from '../utils/color';
 import { format12h, formatDuration } from '../utils/time';
 import { uid } from '../utils/id';
@@ -23,6 +29,18 @@ import SuggestionChips from './SuggestionChips';
 // list, so a custom "Music practice" category is addressable as #music-practice
 // without anything being registered.
 // ============================================================================
+
+/**
+ * The scheduler's own split threshold, and the longest a single task may be.
+ *
+ * The threshold is duplicated from scheduler.ts deliberately narrowly: this file
+ * only decides whether to OFFER the control, and importing the scheduler into a
+ * panel to read one number would tie the two together for no benefit. The cap is a
+ * sanity bound — a task longer than a day cannot be scheduled, so accepting one only
+ * produces an overflow with a confusing reason.
+ */
+const SPLIT_THRESHOLD = 120;
+const MAX_TASK_MINUTES = 24 * 60;
 
 interface Props {
   tasks: Task[];
@@ -390,6 +408,13 @@ function TaskEditor({
   onChange: (patch: Partial<Task>) => void;
   onClose: () => void;
 }) {
+  // Whether the chunking question even applies. Mirrors the scheduler's own rule
+  // rather than guessing at it: only unpinned focus work past the threshold is ever
+  // split, so anything else must not be offered a control that would do nothing.
+  const kind = categories.find((c) => c.id === task.category)?.kind;
+  const willSplit =
+    kind === 'focus' && task.fixedTime == null && task.duration >= SPLIT_THRESHOLD;
+
   return (
     <div className="mx-2.5 mb-2.5 pt-2 border-t border-rule-2 space-y-2.5">
       <div>
@@ -403,7 +428,7 @@ function TaskEditor({
 
       <div>
         <Label>Duration</Label>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1 items-center">
           {DURATION_PRESETS.map((d) => {
             const active = task.duration === d;
             return (
@@ -421,8 +446,55 @@ function TaskEditor({
               </button>
             );
           })}
+          {/* Free entry beside the presets rather than instead of them. The presets
+              are the common cases and are one click; this is for the work that is
+              genuinely 25 or 210 minutes long and was previously unsayable. */}
+          <DurationField
+            duration={task.duration}
+            onChange={(duration) => onChange({ duration })}
+          />
         </div>
+        {task.duration > 0 && !DURATION_PRESETS.includes(task.duration) && (
+          <p className="text-nano text-bone-3 mt-1 font-mono tnum">
+            {formatDuration(task.duration)}
+          </p>
+        )}
       </div>
+
+      {/* Offered only once the work is long enough for the question to arise. Below
+          the split threshold nothing would chunk anyway, and a control that changes
+          nothing is worse than an absent one — it implies the default was a choice. */}
+      {willSplit && (
+        <div>
+          <Label>Length</Label>
+          <button
+            onClick={() => onChange({ keepWhole: task.keepWhole ? undefined : true })}
+            aria-pressed={task.keepWhole === true}
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-micro font-medium transition-all"
+            style={{
+              background: task.keepWhole
+                ? 'var(--signal-dim)'
+                : 'rgba(245, 242, 236,0.035)',
+              border: `1px solid ${
+                task.keepWhole ? 'var(--signal-line)' : 'var(--rule-2)'
+              }`,
+              color: task.keepWhole ? 'var(--signal)' : 'var(--bone-2)',
+            }}
+          >
+            {task.keepWhole ? (
+              <Lock size={10} strokeWidth={2.2} />
+            ) : (
+              <Scissors size={10} strokeWidth={1.9} />
+            )}
+            {task.keepWhole ? 'One block' : 'Split into chunks'}
+          </button>
+          <p className="text-nano text-bone-3 mt-1 leading-snug">
+            {task.keepWhole
+              ? `Scheduled as a single ${formatDuration(task.duration)} block.`
+              : 'Long focus work is split at 90 minutes, with a break between.'}
+          </p>
+        </div>
+      )}
 
       <div>
         <Label>Category</Label>
@@ -497,6 +569,29 @@ function TaskEditor({
         </div>
       </div>
 
+      <div>
+        <Label>Notes</Label>
+        <textarea
+          value={task.notes ?? ''}
+          onChange={(e) =>
+            // Absent rather than empty, matching what the normaliser produces on read
+            // so a task saved and reloaded is equal to itself.
+            onChange({
+              notes: e.target.value.trim()
+                ? e.target.value.slice(0, MAX_NOTE_LENGTH)
+                : undefined,
+            })
+          }
+          rows={2}
+          placeholder="Meeting link, dial-in, a thought…"
+          className="input w-full text-body-sm px-2 py-1.5 leading-relaxed resize-y min-h-[46px] focus:outline-none"
+        />
+        {/* Written here rather than only on the block, so a link can be attached
+            when the meeting is captured — which is the moment it is to hand. It
+            follows the task onto every block it becomes, including each chunk of a
+            split one. */}
+      </div>
+
       <div className="flex justify-end">
         <button
           onClick={onClose}
@@ -506,6 +601,63 @@ function TaskEditor({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Free duration entry, in the same notation the intake line accepts.
+ *
+ * Held as its own draft string rather than writing on every keystroke. Committing
+ * per character would make "120" pass through 1 and then 12, and each of those is a
+ * legitimate duration the scheduler would briefly act on — so a half-typed number
+ * would reshape the day. It commits on blur and on Enter.
+ *
+ * An unparseable entry reverts rather than clearing the duration. There is no such
+ * thing as a task with no length, and silently resetting one to the default because
+ * of a typo is a worse answer than ignoring the typo.
+ */
+function DurationField({
+  duration,
+  onChange,
+}: {
+  duration: number;
+  onChange: (minutes: number) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const [editing, setEditing] = useState(false);
+
+  function commit() {
+    setEditing(false);
+    const parsed = parseDuration(draft);
+    if (parsed != null && parsed > 0 && parsed <= MAX_TASK_MINUTES) onChange(parsed);
+    setDraft('');
+  }
+
+  return (
+    <input
+      value={editing ? draft : ''}
+      onFocus={() => {
+        setEditing(true);
+        setDraft(String(duration));
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+        if (e.key === 'Escape') {
+          setDraft('');
+          setEditing(false);
+          e.currentTarget.blur();
+        }
+      }}
+      placeholder="other"
+      aria-label="Duration in minutes"
+      title="Any length — 25, 210, 1h30"
+      className="input font-mono text-micro px-2 py-1 rounded tnum tracking-wide w-[58px] focus:outline-none"
+    />
   );
 }
 

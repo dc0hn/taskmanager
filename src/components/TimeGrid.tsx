@@ -1,9 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { Check, Pencil, Pin, PinOff } from 'lucide-react';
+import { Check, Link2, Pencil, Pin, PinOff } from 'lucide-react';
 import type { Block, CategoryDef, DayPlan } from '../types';
 import { categoryColors, resolveCategory } from '../utils/color';
 import { format12h, formatHourLabel, toDateKey } from '../utils/time';
+import { firstLink, hasNotes } from '../utils/linkify';
+import { openExternal } from '../utils/external';
 import { DUR, EASE_OUT, SPRING_SETTLE } from '../utils/motion';
 import { DAY_END, reflowInsert, reflowPlace } from '../reflow';
 import { fromDateKey } from '../utils/time';
@@ -457,6 +459,7 @@ function TimeGrid({
                       onEdit={() => onEditBlock(date, b.id)}
                       onToggle={() => onToggleComplete(date, b.id)}
                       onTogglePin={() => onTogglePin(date, b.id)}
+                      onRefuse={onRefuse}
                     />
                   );
                 })}
@@ -592,6 +595,8 @@ interface BlockCardProps {
   onEdit: () => void;
   onToggle: () => void;
   onTogglePin: () => void;
+  /** Reports a link that could not be opened, so the failure is not silent. */
+  onRefuse: (message: string) => void;
 }
 
 /**
@@ -649,11 +654,14 @@ function BlockCard({
   onEdit,
   onToggle,
   onTogglePin,
+  onRefuse,
 }: BlockCardProps) {
   const cat = resolveCategory(block.category, categories);
   const c = categoryColors(block.category, categories);
   const done = !!block.completed;
   const pinned = !!block.pinned;
+  const noted = hasNotes(block.notes);
+  const link = firstLink(block.notes);
   const [hovered, setHovered] = useState(false);
   const reduced = useReducedMotion() ?? false;
 
@@ -857,12 +865,26 @@ function BlockCard({
               </Struck>
             </div>
             <div
-              className="font-mono text-[10px] mt-0.5 tnum tracking-wide truncate"
+              className="font-mono text-[10px] mt-0.5 tnum tracking-wide truncate flex items-center gap-1.5"
               style={{ color: done ? 'var(--bone-3)' : c.textDim }}
             >
-              {density === 'compact'
-                ? format12h(start)
-                : `${format12h(start)} – ${format12h(end)}`}
+              <span className="truncate">
+                {density === 'compact'
+                  ? format12h(start)
+                  : `${format12h(start)} – ${format12h(end)}`}
+              </span>
+              {/* A note with no link gets no button, so without this there would be
+                  nothing at all to say the entry carries one. A dot is enough: it
+                  answers "is there something here" without spending a line of a
+                  block that may only have two. */}
+              {noted && !link && (
+                <span
+                  aria-label="Has notes"
+                  title="Has notes"
+                  className="w-[3px] h-[3px] rounded-full shrink-0"
+                  style={{ background: 'currentColor', opacity: 0.85 }}
+                />
+              )}
             </div>
           </div>
         )}
@@ -941,6 +963,32 @@ function BlockCard({
               )}
             </span>
           </button>
+          {/* Join. Present only when the note actually holds a link, and always
+              visible rather than revealed on hover — the whole value of putting a
+              meeting link on the block is reaching it in one movement at the moment
+              the meeting starts, and a control you have to go looking for first does
+              not do that. Sized like every other control so a short entry still fits
+              its cluster. */}
+          {link && showPin && (
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={async (e) => {
+                e.stopPropagation();
+                const failure = await openExternal(link);
+                if (failure) onRefuse(failure);
+              }}
+              aria-label="Open the link in this entry's notes"
+              title={link}
+              className="grid place-items-center rounded-xs transition-opacity"
+              style={{
+                width: controlBox,
+                height: controlBox,
+                color: done ? 'var(--bone-3)' : 'var(--signal)',
+              }}
+            >
+              <Link2 size={controlIcon} strokeWidth={2.2} />
+            </button>
+          )}
           {/* Pin. Stays visible while pinned, since it changes how every later
               rearrangement behaves and that shouldn't be hidden behind a hover.
               Only offered once the entry is tall enough to hold it. */}
