@@ -43,6 +43,14 @@ interface Props {
 function Foldable({ id, title, summary, defaultOpen = true, children }: Props) {
   const reduced = useReducedMotion();
   const [open, setOpen] = useState(() => readOpen(id, defaultOpen));
+  /**
+   * True only while the height tween is running.
+   *
+   * The clip below needs to be on for the duration of the animation and off the rest
+   * of the time. Starting false matters: a panel that opens on mount never fires an
+   * animation start, and a clip that defaulted to on would stay on forever.
+   */
+  const [animating, setAnimating] = useState(false);
 
   useEffect(() => {
     try {
@@ -85,9 +93,15 @@ function Foldable({ id, title, summary, defaultOpen = true, children }: Props) {
               duration: reduced ? 0 : 0.24,
               ease: [0.2, 0.8, 0.2, 1],
             }}
-            // Clipped during the transition only. Left on permanently it would cut
-            // off anything that legitimately overflows, such as a tooltip.
-            style={{ overflow: 'hidden' }}
+            // Clipped WHILE ANIMATING ONLY, which is what the height tween needs and
+            // all it needs. This used to be a static `overflow: hidden`, which meant
+            // the clip never lifted — and anything whose ink legitimately exceeds its
+            // layout box was cut for the life of the panel. The brass diamond is a
+            // rotated square, so its points sit ~1.7px outside its box; the left one
+            // was sliced flat against this edge and read as a rendering bug.
+            onAnimationStart={() => setAnimating(true)}
+            onAnimationComplete={() => setAnimating(false)}
+            style={{ overflow: animating ? 'hidden' : 'visible' }}
             className="pt-3"
           >
             {children}

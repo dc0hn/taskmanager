@@ -152,7 +152,11 @@ function SideNav({
                 width: 5,
                 height: 5,
                 background: 'var(--signal)',
-                transform: 'rotate(45deg)',
+                // A drawn diamond rather than a rotated square. A rotated square's ink
+              // sits ~21% outside its layout box on every side, so any ancestor
+              // that clips — a collapsing panel, a scroll container — slices its
+              // points flat. `clip-path` keeps the same shape strictly inside.
+              clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
               }}
               aria-hidden
             />

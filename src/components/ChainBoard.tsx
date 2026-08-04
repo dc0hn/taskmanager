@@ -75,7 +75,11 @@ function ChainRow({ status }: { status: ChainStatus }) {
                     width: 6,
                     height: 6,
                     background: i < cleared ? 'var(--signal)' : 'var(--chassis-4)',
-                    transform: 'rotate(45deg)',
+                    // A drawn diamond rather than a rotated square. A rotated square's ink
+              // sits ~21% outside its layout box on every side, so any ancestor
+              // that clips — a collapsing panel, a scroll container — slices its
+              // points flat. `clip-path` keeps the same shape strictly inside.
+              clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
                   }}
                 />
               ))}
