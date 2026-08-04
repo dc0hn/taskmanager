@@ -4,6 +4,7 @@ import {
   Clock3,
   Gauge,
   LayoutGrid,
+  Microscope,
   Repeat,
   Tag,
   Target,
@@ -33,6 +34,7 @@ export type NavKey =
   | 'routines'
   | 'standing'
   | 'months'
+  | 'study'
   | 'categories';
 
 interface Props {
@@ -69,6 +71,7 @@ const NAV_ITEMS: { key: NavKey; label: string; icon: typeof LayoutGrid }[] = [
   { key: 'routines', label: 'Routines', icon: Repeat },
   { key: 'standing', label: 'Standing', icon: TrendingUp },
   { key: 'months', label: 'The record', icon: Gauge },
+  { key: 'study', label: 'The study', icon: Microscope },
   { key: 'categories', label: 'Categories', icon: Tag },
 ];
 

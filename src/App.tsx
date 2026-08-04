@@ -71,6 +71,14 @@ import {
   loadPlans,
   loadAllMonths,
   loadAllWeeks,
+  loadStudyDigests,
+  loadStudyEvents,
+  loadStudyFindings,
+  loadStudyProfile,
+  saveStudyDigests,
+  saveStudyEvents,
+  saveStudyFindings,
+  saveStudyProfile,
   loadSettings,
   loadWeek,
   savePlan,
@@ -204,6 +212,13 @@ import {
   reflowRemove,
 } from './reflow';
 import { clearToIntake, hasClearableBlocks } from './unschedule';
+import StudyView from './components/StudyView';
+import CheckmarkStrip from './components/CheckmarkStrip';
+import { buildBriefing, parseFindings } from './study/briefing';
+import { revise as reviseProfile, type Answers } from './study/profile';
+import { flushNow, installRecorder, record } from './study/recorder';
+import { append, trimRaw } from './study/ledger';
+import { digestFinishedDays, pruneDigests } from './study/digest';
 import {
   buildWeekReview,
   dropFromCarryover,
@@ -220,7 +235,13 @@ import {
   setVoided,
 } from './goals';
 import {
+  checkDateFor,
+  inGraceWindow,
+  checkmarksDueOn,
+  checksOn,
   dueStatuses,
+  isChecked,
+  setChecked,
   pruneCompletions,
   reconcileCompletions,
   taskFromTemplate,
@@ -231,6 +252,7 @@ import {
   formatDuration,
   minutesTo24h,
   parse24h,
+  fromDateKey,
   toDateKey,
 } from './utils/time';
 import { uid } from './utils/id';
@@ -254,6 +276,15 @@ import {
  * though it had been done before breakfast — and the punctuality bonus would be
  * handed out for work that was hours late.
  */
+/** "Tue 4 Aug" — for saying which day a check landed on. */
+function formatDayLabel(dateKey: string): string {
+  return fromDateKey(dateKey).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
 function minutesSinceMidnightOf(dayKey: string): number {
   const now = new Date();
   const todayKey = toDateKey(now);
@@ -980,6 +1011,11 @@ export default function App() {
         {
           boost: boostFor(shop, d),
           character: characterOf(byWeek.get(toWeekKey(d))),
+          // Read from the habit log rather than held separately, so a check reconciles
+          // exactly like every other completion — the day is re-reckoned and the
+          // DIFFERENCE applied, which is what makes ticking one at 00:30 credit the
+          // right day's total without any special path.
+          checks: checksOn(habits.completions, d),
         },
       ])
     );
@@ -990,7 +1026,7 @@ export default function App() {
     // unnecessary are the only thing that invalidates them. It cannot see through the
     // `load*` calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authoritativeDates, shop, weekEpoch]);
+  }, [authoritativeDates, shop, weekEpoch, habits.completions]);
 
   useEffect(() => {
     // A sealed week is settled history. Its outcome has already been folded into
@@ -1921,6 +1957,160 @@ export default function App() {
     [dayPlan.blocks]
   );
 
+  /**
+   * The study's instrument.
+   *
+   * Installs the recorder, then does the day's compaction: seal every finished day the
+   * raw log holds into a digest, drop the raw events behind the window, and prune
+   * digests past the retention line.
+   *
+   * ORDER IS THE WHOLE THING. Digest first, trim second. Reversed, the trim would throw
+   * away the events for a day before they had been measured, and that day would be
+   * silently missing from the record with nothing to indicate it had ever existed.
+   *
+   * Keyed on `todayKey` so it runs once a day rather than on every render, and so a
+   * session left open across midnight compacts yesterday without needing a relaunch.
+   */
+  useEffect(() => {
+    const stop = installRecorder((events) => {
+      const stored = loadStudyEvents();
+      let next = stored;
+      for (const e of events) next = append(next, e);
+      saveStudyEvents(trimRaw(next, toDateKey(new Date())));
+    });
+    record('app.open');
+    return stop;
+  }, []);
+
+  useEffect(() => {
+    // Anything buffered has to be on disk before it can be digested.
+    flushNow();
+    const events = loadStudyEvents();
+    const existing = loadStudyDigests();
+
+    const fresh = digestFinishedDays(
+      todayKey,
+      events,
+      existing,
+      (d) => loadPlan(d).blocks,
+      (d) => dayStats[d],
+      (id) => categories.find((c) => c.id === id)?.kind === 'focus'
+    );
+
+    if (fresh.length > 0) {
+      saveStudyDigests(pruneDigests([...existing, ...fresh], todayKey));
+    }
+    // Trim AFTER digesting, never before. See above.
+    const trimmed = trimRaw(events, todayKey);
+    if (trimmed.length !== events.length) saveStudyEvents(trimmed);
+    // `categories` and `dayStats` are read to MEASURE a finished day, not to decide
+    // whether to. Adding them would re-run the compaction on every tick of the day's
+    // stats — sealing nothing new each time, since digesting is idempotent, but doing
+    // the work over and over for no reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayKey]);
+
+  // -------------------------------------------------------------------------
+  // The study
+  //
+  // Read from storage rather than held in the progression store, because none of it
+  // is scored and none of it may ever affect a total. Keeping it structurally apart
+  // from the reducer is what guarantees that: there is no path from an observation to
+  // an XP figure, which is the one thing that would make the instrument corrupt the
+  // thing it observes.
+  // -------------------------------------------------------------------------
+  const [studyEpoch, setStudyEpoch] = useState(0);
+  const [importError, setImportError] = useState('');
+
+  const studyDigests = useMemo(
+    () => loadStudyDigests(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [studyEpoch, todayKey]
+  );
+  const studyProfile = useMemo(
+    () => loadStudyProfile(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [studyEpoch]
+  );
+  const studyFindings = useMemo(
+    () => loadStudyFindings(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [studyEpoch]
+  );
+
+  const handleSaveProfile = useCallback(
+    (answers: Answers) => {
+      saveStudyProfile(reviseProfile(loadStudyProfile(), answers, todayKey));
+      setStudyEpoch((n) => n + 1);
+      setToast('Answers saved.');
+    },
+    [todayKey]
+  );
+
+  /**
+   * Copy the briefing pack to the clipboard.
+   *
+   * The clipboard rather than a file, because the pack's only destination is a
+   * conversation elsewhere — writing it to disk would add a step at both ends. The
+   * export date is recorded so `shouldExport` can stop suggesting it for a week.
+   */
+  const handleExportBriefing = useCallback(async () => {
+    const pack = buildBriefing(
+      todayKey,
+      loadStudyDigests(),
+      loadStudyProfile(),
+      loadStudyFindings().findings
+    );
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(pack, null, 2));
+      const store = loadStudyFindings();
+      saveStudyFindings({ ...store, lastExport: todayKey });
+      setStudyEpoch((n) => n + 1);
+      setToast(`Briefing copied — ${pack.observedDays} days of observation.`);
+    } catch {
+      setToast('Could not reach the clipboard.');
+    }
+  }, [todayKey]);
+
+  /**
+   * Take findings back in.
+   *
+   * Imported findings are APPENDED and de-duplicated by id, never replaced wholesale.
+   * A pack that happens to omit an earlier finding must not delete it — the register
+   * is a record of what was claimed and when, and an import is not an authority on
+   * what was claimed before it.
+   */
+  const handleImportFindings = useCallback((text: string) => {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      setImportError('That is not valid JSON.');
+      return;
+    }
+    const { pack, error } = parseFindings(raw);
+    if (!pack) {
+      setImportError(error);
+      return;
+    }
+    const store = loadStudyFindings();
+    const byId = new Map(store.findings.map((f) => [f.id, f]));
+    let added = 0;
+    for (const f of pack.findings) {
+      if (byId.has(f.id)) continue;
+      byId.set(f.id, f);
+      added++;
+    }
+    saveStudyFindings({ ...store, findings: [...byId.values()] });
+    setStudyEpoch((n) => n + 1);
+    setImportError('');
+    setToast(
+      added === 0
+        ? 'Nothing new — those findings are already in the register.'
+        : `${added} ${added === 1 ? 'finding' : 'findings'} imported.`
+    );
+  }, []);
+
   /** Is there anything a clear would actually move? */
   const canUnschedule = useMemo(
     () => hasClearableBlocks(dayPlan.blocks),
@@ -1933,6 +2123,24 @@ export default function App() {
    * The rule itself lives in `clearToIntake` — what stays is the entire safety of this
    * operation, and a rule inside a click handler is a rule nothing can assert.
    */
+  /**
+   * Day navigation, recorded.
+   *
+   * Wrapped here rather than at each of the seven call sites that move the date, so a
+   * new one cannot be added without the study seeing it. Records only an actual
+   * change: clicking "Today" while already on today is not transport.
+   */
+  const navigateTo = useCallback(
+    (next: string) => {
+      setDate((prev) => {
+        if (prev === next) return prev;
+        record('day.nav', { date: next, a: daysBetween(prev, next) });
+        return next;
+      });
+    },
+    []
+  );
+
   const handleUnscheduleUnpinned = useCallback(() => {
     const plan = plansRef.current[date];
     if (!plan) return;
@@ -1945,6 +2153,7 @@ export default function App() {
       (p) => ({ ...p, blocks: kept, tasks: [...p.tasks, ...returned] }),
       'clearing the day'
     );
+    record('day.clear', { date, a: returned.length, b: pinnedKept });
     setOverflow([]);
     setOverflowReasons({});
     setToast(
@@ -1959,8 +2168,64 @@ export default function App() {
   // -------------------------------------------------------------------------
   // Day-level actions
   // -------------------------------------------------------------------------
+  /**
+   * The checkmark list, and which day a tick would land on.
+   *
+   * The strip always shows the CREDITING day rather than the day on screen. Paging back
+   * to Tuesday must not offer to tick Tuesday's water — a checkmark is a thing you did
+   * or did not do just now, and letting it be applied to an arbitrary past day would
+   * turn the record into something you could write rather than something you kept.
+   */
+  const checkCredit = useMemo(() => {
+    const now = new Date();
+    const date = checkDateFor(now);
+    return { date, inGrace: inGraceWindow(now), label: formatDayLabel(date) };
+    // `todayKey` is what makes this recompute at all: it reads the clock, which is not
+    // reactive, and the midnight tick is the only signal that the crediting day may
+    // have moved. eslint sees an unused dependency; it is the only live one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayKey]);
+
+  const checkmarks = useMemo(
+    () => checkmarksDueOn(habits.templates, checkCredit.date),
+    [habits.templates, checkCredit.date]
+  );
+
+  const checkedToday = useMemo(
+    () =>
+      new Set(
+        checkmarks
+          .filter((t) => isChecked(habits.completions, t.id, checkCredit.date))
+          .map((t) => t.id)
+      ),
+    [checkmarks, habits.completions, checkCredit.date]
+  );
+
+  /**
+   * Tick or untick a checkmark.
+   *
+   * The date is decided by `checkDateFor`, not by which day is on screen: before 4am a
+   * check belongs to the day that just ended. The toast states which day it landed on,
+   * because a date chosen for you and not stated is indistinguishable from a bug.
+   */
+  const handleToggleCheck = useCallback(
+    (templateId: string, on: boolean) => {
+      const date = checkDateFor(new Date());
+      setHabits((prev) => ({
+        ...prev,
+        completions: setChecked(prev.completions, templateId, date, on),
+      }));
+      record(on ? 'block.done' : 'block.undone', { date, ref: templateId });
+      if (on && date !== todayKey) {
+        setToast(`Checked for ${formatDayLabel(date)} — the day that just ended.`);
+      }
+    },
+    [todayKey]
+  );
+
   const handleAddTasks = useCallback(
     (newTasks: Task[]) => {
+      for (const t of newTasks) record('task.add', { date, ref: t.id, a: t.duration });
       mutateDay(date, (p) => ({ ...p, tasks: [...p.tasks, ...newTasks] }), 'adding those tasks');
     },
     [date, mutateDay]
@@ -2056,6 +2321,11 @@ export default function App() {
       return completed.has(b.id) ? { ...withPriority, completed: true } : withPriority;
     });
 
+    record('day.build', {
+      date,
+      a: blocks.filter((b) => !b.auto).length,
+      b: result.overflow.length,
+    });
     mutateDay(date, (p) => ({ ...p, blocks, tasks: [] }), 'building the day');
     setOverflow(result.overflow);
     setOverflowReasons(result.reasons);
@@ -2122,6 +2392,27 @@ export default function App() {
   const handleChangeBlock = useCallback(
     (day: string, id: string, patch: Partial<Block>) => {
       const geometric = patch.start != null || patch.end != null;
+
+      // A move and a resize are different motions and the study must not conflate
+      // them: one is transport, the other is re-estimation.
+      const was = plansRef.current[day]?.blocks.find((b) => b.id === id);
+      if (was) {
+        const start = patch.start ?? was.start;
+        const end = patch.end ?? was.end;
+        const lengthChanged = end - start !== was.end - was.start;
+        const startMoved = start !== was.start;
+        if (lengthChanged) {
+          record('block.resize', {
+            date: day, ref: id, a: was.end - was.start, b: end - start,
+          });
+        }
+        if (startMoved) {
+          record('block.move', { date: day, ref: id, a: start - was.start, b: 0 });
+        }
+        if (!lengthChanged && !startMoved) {
+          record('block.edit', { date: day, ref: id });
+        }
+      }
       if (!geometric) {
         mutateDay(day, (p) => ({
           ...p,
@@ -2182,6 +2473,12 @@ export default function App() {
       // A deliberate move, so it counts. Reflow displacement deliberately does not:
       // one drag can push six blocks down, and counting those would mark all seven
       // as rescheduled and make the number meaningless.
+      record('block.move', {
+        date: to,
+        ref: id,
+        a: (patch.start ?? block.start) - block.start,
+        b: daysBetween(from, to),
+      });
       const incoming = { ...block, ...patch, moves: (block.moves ?? 0) + 1 };
       const destination = plansRef.current[to]?.blocks ?? [];
       const landing = reflowInsert(destination, incoming, settings.workingEnd);
@@ -2204,6 +2501,9 @@ export default function App() {
     [mutateDay, settings.workingEnd]
   );
 
+  // Each of these records the motion alongside the action rather than inside
+  // `mutateDay`, which sees only "a day changed" and could not tell a move from a
+  // resize from a deletion — and the difference between those is most of the study.
   const handleToggleComplete = useCallback(
     (day: string, id: string) => {
       const block = plansRef.current[day]?.blocks.find((b) => b.id === id);
@@ -2221,6 +2521,12 @@ export default function App() {
       }
 
       const nowCompleted = !block?.completed;
+      record(nowCompleted ? 'block.done' : 'block.undone', {
+        date: day,
+        ref: id,
+        a: nowCompleted ? minutesSinceMidnightOf(day) : 0,
+        b: block ? block.end - block.start : 0,
+      });
 
       mutateDay(day, (p) => ({
         ...p,
@@ -2580,9 +2886,14 @@ export default function App() {
   const handleStep = useCallback(
     (dir: -1 | 1) => {
       setTravel(dir);
-      if (view === 'day') setDate((d) => addDays(d, dir));
-      else if (view === 'week') setDate((d) => addWeeks(d, dir));
-      else setDate((d) => addMonths(d, dir));
+      setDate((d) => {
+        const next =
+          view === 'day' ? addDays(d, dir)
+          : view === 'week' ? addWeeks(d, dir)
+          : addMonths(d, dir);
+        record('day.nav', { date: next, a: daysBetween(d, next) });
+        return next;
+      });
     },
     [view]
   );
@@ -2732,14 +3043,14 @@ export default function App() {
   }, [date]);
 
   const handleSelectDate = useCallback((d: string) => {
-    setDate(d);
+    navigateTo(d);
     setNav('calendar');
-  }, []);
+  }, [navigateTo]);
 
   const handleOpenDay = useCallback((d: string) => {
-    setDate(d);
+    navigateTo(d);
     setView('day');
-  }, []);
+  }, [navigateTo]);
 
   // -------------------------------------------------------------------------
   // Render
@@ -2787,11 +3098,14 @@ export default function App() {
           <>
             <Toolbar
               view={view}
-              onView={setView}
+              onView={(v) => {
+                record('view.switch', { date, ref: v });
+                setView(v);
+              }}
               date={date}
               weekKey={weekKey}
               onStep={handleStep}
-              onToday={() => setDate(todayKey)}
+              onToday={() => navigateTo(todayKey)}
               onAdd={handleQuickAdd}
               canReplan={canReplan && view === 'day'}
               canUnschedule={canUnschedule && view === 'day'}
@@ -2866,6 +3180,21 @@ export default function App() {
               // Asymmetric two-column measure — the sheet dominates, the margin
               // annotates. Divided by a single vertical rule rather than a gap
               // between two floating cards.
+              <div className="flex-1 min-h-0 flex flex-col">
+                {/* In the gap between the toolbar and the sheet, spanning the full
+                    measure. Outside the frame rather than inside it, and above the
+                    timeline rather than on it: a checkmark is not an appointment and
+                    must not be drawn as one — a row on the grid would put it back into
+                    the schedule visually while claiming it is out of it. */}
+                <CheckmarkStrip
+                  items={checkmarks}
+                  categories={categories}
+                  checked={checkedToday}
+                  creditDate={checkCredit.date}
+                  creditLabel={checkCredit.label}
+                  inGrace={checkCredit.inGrace}
+                  onToggle={handleToggleCheck}
+                />
               <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr_356px] px-6 pb-6 gap-0">
                 <div className="framed flex flex-col min-h-0 overflow-hidden">
                   <TimeGrid
@@ -2916,8 +3245,26 @@ export default function App() {
                   <SummaryCard blocks={dayPlan.blocks} categories={categories} />
                 </div>
               </div>
+              </div>
             )}
             </ViewTransition>
+          </>
+        )}
+
+        {nav === 'study' && (
+          <>
+            <div className="titlebar-drag" />
+            <StudyView
+              digests={studyDigests}
+              profile={studyProfile}
+              findings={studyFindings.findings}
+              lastExport={studyFindings.lastExport}
+              today={todayKey}
+              onSaveProfile={handleSaveProfile}
+              onExport={handleExportBriefing}
+              onImport={handleImportFindings}
+              importError={importError}
+            />
           </>
         )}
 

@@ -111,8 +111,86 @@ export function reconcileCompletions(
     seen.add(b.templateId);
     earned.push({ templateId: b.templateId, date, minutes });
   }
-  const others = completions.filter((c) => c.date !== date);
+  // Everything for this date is rebuilt from the blocks — EXCEPT checkmarks, which
+  // have no block to be rebuilt from. Without this line every checkmark would be
+  // erased by the next reconcile, which runs on any change to the day.
+  const others = completions.filter((c) => c.date !== date || c.checked === true);
   return [...others, ...earned];
+}
+
+// ---------------------------------------------------------------------------
+// Checkmarks
+// ---------------------------------------------------------------------------
+
+/**
+ * The hour before which a check still counts as yesterday.
+ *
+ * Not a fudge. The app already holds that a day extends past midnight — a Monday block
+ * ticked at 00:30 on Tuesday records 1470 minutes, not 30, because the alternative is
+ * declaring that work finished before breakfast. This is the same rule applied to the
+ * one thing most likely to be finished at half past midnight.
+ */
+export const GRACE_HOUR = 4;
+
+/**
+ * Which day a check made right now belongs to.
+ *
+ * Always shown in the UI rather than applied silently. A date decided for you and not
+ * stated is indistinguishable from a bug the first time it surprises you.
+ */
+export function checkDateFor(now: Date = new Date()): string {
+  const shifted = new Date(now);
+  if (now.getHours() < GRACE_HOUR) shifted.setDate(shifted.getDate() - 1);
+  return toDateKey(shifted);
+}
+
+/** True when the grace window is currently redirecting checks to yesterday. */
+export function inGraceWindow(now: Date = new Date()): boolean {
+  return now.getHours() < GRACE_HOUR;
+}
+
+/** Checkmark routines due on a date, active ones only. */
+export function checkmarksDueOn(
+  templates: RecurringTask[],
+  dateKey: string
+): RecurringTask[] {
+  return templatesDueOn(templates, dateKey).filter((t) => t.checkmark === true);
+}
+
+/** Whether a checkmark is ticked on a date. */
+export function isChecked(
+  completions: RecurringCompletion[],
+  templateId: string,
+  date: string
+): boolean {
+  return completions.some(
+    (c) => c.templateId === templateId && c.date === date && c.checked === true
+  );
+}
+
+/**
+ * Tick or untick a checkmark. Idempotent in both directions.
+ *
+ * Carries `minutes: 0` because a checkmark is not time. Everything that sums minutes —
+ * the record, the month view, the study — therefore stays honest without needing to
+ * know checkmarks exist.
+ */
+export function setChecked(
+  completions: RecurringCompletion[],
+  templateId: string,
+  date: string,
+  on: boolean
+): RecurringCompletion[] {
+  const without = completions.filter(
+    (c) => !(c.templateId === templateId && c.date === date)
+  );
+  if (!on) return without;
+  return [...without, { templateId, date, minutes: 0, checked: true }];
+}
+
+/** How many checkmarks were ticked on a date. */
+export function checksOn(completions: RecurringCompletion[], date: string): number {
+  return completions.filter((c) => c.date === date && c.checked === true).length;
 }
 
 /**
@@ -222,7 +300,13 @@ export function dueStatuses(
   placedTemplateIds: Set<string>,
   now: Date = new Date()
 ): TemplateStatus[] {
-  return templatesDueOn(store.templates, dateKey).map((template) => ({
+  return templatesDueOn(store.templates, dateKey)
+    // Checkmarks are excluded HERE, at the single point where routines are offered to
+    // the day. That is what keeps them out of the scheduler entirely — the suggestion
+    // chips, the intake and the build all read this one function, so there is no
+    // second place a checkmark could leak into a timed block.
+    .filter((t) => t.checkmark !== true)
+    .map((template) => ({
     template,
     streak: streakFor(template, store.completions, now),
     placed: placedTemplateIds.has(template.id),

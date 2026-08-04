@@ -475,6 +475,19 @@ export interface RecurringTask {
   rule: RecurrenceRule;
   createdOn: string; // date key — streaks never count days before this
   active: boolean;
+  /**
+   * A CHECKMARK rather than a scheduled block.
+   *
+   * Some recurring things have no slot. A gallon of water is finished whenever it is
+   * finished, and putting it on the grid at 3pm makes the calendar say something false
+   * — then marks it late, or drops it into overflow, or leaves it unticked because the
+   * block it needed was never built.
+   *
+   * A checkmark never reaches the scheduler. It has no start, no end, and cannot be
+   * displaced, late, or lost to a day that was not rebuilt. `duration` is retained but
+   * unused, so switching back to a timed block restores what it was.
+   */
+  checkmark?: boolean;
 }
 
 /** One completion of a recurring task on a given day. */
@@ -482,6 +495,17 @@ export interface RecurringCompletion {
   templateId: string;
   date: string; // YYYY-MM-DD
   minutes: number;
+  /**
+   * Ticked directly rather than derived from a completed block.
+   *
+   * LOAD-BEARING. `reconcileCompletions` rebuilds a day's completions from its blocks
+   * and drops everything else for that date — which is correct for block-derived rows
+   * and would silently erase every checkmark on the next reconcile. This flag is what
+   * survives that, and it is stored rather than inferred from `minutes === 0` so a
+   * routine switched back to a timed block cannot retroactively change what its old
+   * rows meant.
+   */
+  checked?: boolean;
 }
 
 export interface HabitStore {
@@ -609,6 +633,14 @@ export interface DailyStat {
   completedCount: number;
   /** Completed minutes in focus-kind categories. */
   focusMinutes: number;
+  /**
+   * Checkmarks ticked that day.
+   *
+   * Deliberately NOT folded into `doneMinutes`. A checkmark is not minutes worked, and
+   * adding it to that figure would inflate every hours-done total in the app — the
+   * record, the month summaries, the study — with time nobody spent.
+   */
+  checks?: number;
 }
 
 /** A single line of the day's ledger, for display. */

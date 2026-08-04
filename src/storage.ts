@@ -47,6 +47,15 @@ import type { Commission } from './commissions';
 import { isSeasonKey, seasonRange, type SeasonRecord } from './seasons';
 import { characterById } from './characters';
 import { toDateKey } from './utils/time';
+import { decodeEvent, encodeEvent, type StudyEvent } from './study/ledger';
+import type { DayDigest } from './study/digest';
+import {
+  emptyProfile,
+  QUESTIONS,
+  type Answers,
+  type Individuality,
+} from './study/profile';
+import { FINDINGS_FORMAT, parseFindings, type Finding } from './study/briefing';
 
 // ============================================================================
 // Persistence
@@ -80,6 +89,10 @@ const COMMISSIONS_KEY = 'dp:commissions:v1';
 const SEASON_PREFIX = 'dp:season:';
 const MARK_DEFS_KEY = 'dp:markdefs:v1';
 const DAY_MARKS_KEY = 'dp:daymarks:v1';
+const STUDY_EVENTS_KEY = 'dp:study:events:v1';
+const STUDY_DIGESTS_KEY = 'dp:study:digests:v1';
+const STUDY_PROFILE_KEY = 'dp:study:profile:v1';
+const STUDY_FINDINGS_KEY = 'dp:study:findings:v1';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -631,6 +644,9 @@ function normalizeTemplate(r: unknown): RecurringTask | null {
     rule: normalizeRule(t.rule),
     createdOn: isDateKey(t.createdOn) ? t.createdOn : '1970-01-01',
     active: t.active !== false,
+    // Absent, not false, when off. A routine predating checkmarks is a timed block,
+    // and writing the false onto every one of them would record a decision nobody made.
+    checkmark: t.checkmark === true ? true : undefined,
   };
 }
 
@@ -639,6 +655,14 @@ function normalizeCompletion(r: unknown): RecurringCompletion | null {
   const c = r as Record<string, unknown>;
   const templateId = str(c.templateId);
   if (!templateId || !isDateKey(c.date)) return null;
+
+  // A checkmark carries no minutes, which the old guard rejected outright — every
+  // check would have survived until the next reload and then silently vanished. The
+  // zero is the whole point of the record, so the two cases are validated apart:
+  // a block-derived completion must have real minutes, a check must have none.
+  const checked = c.checked === true;
+  if (checked) return { templateId, date: c.date, minutes: 0, checked: true };
+
   if (!isFiniteNum(c.minutes) || c.minutes <= 0) return null;
   return { templateId, date: c.date, minutes: Math.round(c.minutes) };
 }
@@ -901,6 +925,7 @@ function normalizeDailyStat(date: string, r: unknown): DailyStat | null {
     cleared: d.cleared === true,
     completedCount: num(d.completedCount),
     focusMinutes: num(d.focusMinutes),
+    checks: num(d.checks) > 0 ? num(d.checks) : undefined,
   };
 }
 
@@ -1287,4 +1312,142 @@ export function importAll(json: string, replace: boolean): ImportResult {
       written: 0,
     };
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// The study
+//
+// Four keys rather than one record, because they have completely different write
+// rates: raw events are written on every interaction, digests once a day, the profile
+// rarely, findings by hand. One combined record would rewrite the whole thing on every
+// click — which at a fortnight of raw events is a ~100 KB serialise per keystroke.
+// ---------------------------------------------------------------------------
+
+export function loadStudyEvents(): StudyEvent[] {
+  const parsed = read<unknown[]>(STUDY_EVENTS_KEY);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(decodeEvent).filter((e): e is StudyEvent => e !== null);
+}
+
+export function saveStudyEvents(events: StudyEvent[]): void {
+  write(STUDY_EVENTS_KEY, events.map(encodeEvent));
+}
+
+export function loadStudyDigests(): DayDigest[] {
+  const parsed = read<unknown[]>(STUDY_DIGESTS_KEY);
+  if (!Array.isArray(parsed)) return [];
+
+  const out: DayDigest[] = [];
+  const seen = new Set<string>();
+  for (const raw of parsed) {
+    if (!raw || typeof raw !== 'object') continue;
+    const d = raw as Record<string, unknown>;
+    // A digest without a valid date cannot be placed in the series, and a duplicate
+    // would be counted twice by every mean in the battery.
+    if (!isDateKey(d.date) || seen.has(d.date)) continue;
+    seen.add(d.date);
+
+    const n = (v: unknown): number =>
+      isFiniteNum(v) && v >= 0 ? Math.round(v) : 0;
+    const nOrNull = (v: unknown): number | null => (isFiniteNum(v) ? Math.round(v) : null);
+
+    out.push({
+      date: d.date,
+      blocksPlanned: n(d.blocksPlanned),
+      blocksDone: n(d.blocksDone),
+      minutesPlanned: n(d.minutesPlanned),
+      minutesDone: n(d.minutesDone),
+      creates: n(d.creates),
+      moves: n(d.moves),
+      resizes: n(d.resizes),
+      deletes: n(d.deletes),
+      builds: n(d.builds),
+      clears: n(d.clears),
+      opens: n(d.opens),
+      viewSwitches: n(d.viewSwitches),
+      dayNavigations: n(d.dayNavigations),
+      longestBlock: n(d.longestBlock),
+      deepMinutes: n(d.deepMinutes),
+      focusMinutes: n(d.focusMinutes),
+      contexts: n(d.contexts),
+      // Signed and genuinely nullable — drift is negative when work is ticked early,
+      // and absent when nothing carried a timestamp. Coercing either to zero would
+      // invent punctuality.
+      tickDrift: nOrNull(d.tickDrift),
+      firstTick: nOrNull(d.firstTick),
+      lastTick: nOrNull(d.lastTick),
+    });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function saveStudyDigests(digests: DayDigest[]): void {
+  write(STUDY_DIGESTS_KEY, digests);
+}
+
+export function loadStudyProfile(): Individuality {
+  const parsed = read<Record<string, unknown>>(STUDY_PROFILE_KEY);
+  if (!parsed || typeof parsed !== 'object') return emptyProfile();
+
+  const answersOf = (raw: unknown): Answers => {
+    const base = emptyProfile().answers;
+    if (!raw || typeof raw !== 'object') return base;
+    const a = raw as Record<string, unknown>;
+    const out = { ...base };
+    for (const q of QUESTIONS) {
+      const v = a[q.key];
+      if (typeof v === 'string') out[q.key] = v.slice(0, 4000);
+    }
+    return out;
+  };
+
+  const history: Individuality['history'] = [];
+  if (Array.isArray(parsed.history)) {
+    for (const h of parsed.history.slice(0, 20)) {
+      if (!h || typeof h !== 'object') continue;
+      const entry = h as Record<string, unknown>;
+      if (!isDateKey(entry.revised)) continue;
+      history.push({ revised: entry.revised, answers: answersOf(entry.answers) });
+    }
+  }
+
+  return {
+    revised: isDateKey(parsed.revised) ? parsed.revised : '',
+    history,
+    answers: answersOf(parsed.answers),
+  };
+}
+
+export function saveStudyProfile(profile: Individuality): void {
+  write(STUDY_PROFILE_KEY, profile);
+}
+
+/** Imported findings, plus the date of the last export that produced any. */
+export interface FindingsStore {
+  findings: Finding[];
+  lastExport: string | null;
+}
+
+export function loadStudyFindings(): FindingsStore {
+  const parsed = read<Record<string, unknown>>(STUDY_FINDINGS_KEY);
+  if (!parsed || typeof parsed !== 'object') return { findings: [], lastExport: null };
+
+  // Re-validated through the same reader the import uses, so a hand-edited store
+  // cannot hold a finding the import would have refused — which is where a
+  // hypothesis would otherwise get laundered into an observation.
+  const wrapped = {
+    format: FINDINGS_FORMAT,
+    findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+  };
+  const { pack } = parseFindings(wrapped);
+
+  return {
+    findings: pack?.findings ?? [],
+    lastExport: isDateKey(parsed.lastExport) ? parsed.lastExport : null,
+  };
+}
+
+export function saveStudyFindings(store: FindingsStore): void {
+  write(STUDY_FINDINGS_KEY, store);
 }

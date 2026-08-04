@@ -450,6 +450,30 @@ export interface DayReckoning {
  * plausible-looking `1`. Build it once and share it; there is a `boosts` memo in App.tsx
  * doing exactly that.
  */
+/**
+ * What a checkmark pays, and the most a day of them can pay.
+ *
+ * Flat and small, with a hard daily cap. A checkmark has no duration, so there is no
+ * honest way to scale it by effort — and an uncapped per-item reward would make a list
+ * of twenty trivial items out-earn an afternoon of real work, which is exactly the
+ * Goodhart failure the shop audit warned about. Five checks is 40 XP; one 90-minute
+ * focus block is still worth more than all of them together.
+ */
+export const CHECK_XP = 8;
+export const CHECK_XP_DAILY_CAP = 40;
+
+/**
+ * Credit a checkmark contributes toward the day's streak threshold, and the ceiling on
+ * how much of a day the whole set may account for.
+ *
+ * The share cap is the part that matters. The threshold is 0.6, so capping checks at
+ * 0.4 of the day means they can never carry a day alone: you always need real work for
+ * at least the remaining fifth. Without it, a day with thirty minutes planned and five
+ * checks would sail past the threshold on checkmarks.
+ */
+export const CHECK_CREDIT_MINUTES = 10;
+export const CHECK_CREDIT_SHARE = 0.4;
+
 export interface DayModifiers {
   /** Purchased booster for this specific day. 1 when none. */
   boost: number;
@@ -465,6 +489,15 @@ export interface DayModifiers {
     brassRate?: number;
     comboMax?: number;
   } | null;
+  /**
+   * Checkmarks ticked on this day.
+   *
+   * Belongs here rather than as a parameter because this object is already documented
+   * as "everything outside the day's blocks that changes its score", and a checkmark is
+   * precisely that. Defaults to zero, so every existing caller and every stored day
+   * predating checkmarks reckons exactly as it did.
+   */
+  checks?: number;
 }
 
 export const NO_MODIFIERS: DayModifiers = { boost: 1, character: null };
@@ -532,6 +565,24 @@ export function reckonDay(
       xp: bonus,
       minutes: 0,
       notes: ['every planned minute done'],
+    });
+  }
+
+  // Checkmarks, as their own line. Flat, capped, and outside every multiplier — no
+  // combo, no punctuality, no kind weight, because a checkmark has no duration for
+  // those to scale and no place in the schedule order for a combo to run through. It
+  // sits before the character bonus and the boost so a doubled day doubles it too,
+  // which is consistent with everything else that pays on a boosted day.
+  const checks = Math.max(0, Math.round(mods.checks ?? 0));
+  if (checks > 0) {
+    const checkXp = Math.min(CHECK_XP_DAILY_CAP, checks * CHECK_XP);
+    xpEarned += checkXp;
+    lines.push({
+      id: `${date}:checks`,
+      label: checks === 1 ? 'Checkmark' : `Checkmarks × ${checks}`,
+      xp: checkXp,
+      minutes: 0,
+      notes: checks * CHECK_XP > CHECK_XP_DAILY_CAP ? ['daily cap reached'] : [],
     });
   }
 
@@ -605,6 +656,9 @@ export function reckonDay(
       cleared,
       completedCount,
       focusMinutes,
+      // Absent rather than zero on a day with no checks, so four hundred stored days
+      // do not each carry a field recording that nothing happened.
+      checks: checks > 0 ? checks : undefined,
     },
     lines,
     byCategory,
@@ -615,7 +669,15 @@ export function reckonDay(
 /** Share of the day's planned minutes completed, 0..1. */
 export function dayScore(stat: DailyStat | undefined): number {
   if (!stat || stat.plannedMinutes <= 0) return 0;
-  return Math.min(1, stat.doneMinutes / stat.plannedMinutes);
+  // Checks count toward the threshold but are bounded to a share of the day, so they
+  // help a real day over the line and can never constitute one. `doneMinutes` itself
+  // is untouched — a checkmark is not time worked, and every hours figure in the app
+  // reads that field.
+  const credit = Math.min(
+    (stat.checks ?? 0) * CHECK_CREDIT_MINUTES,
+    stat.plannedMinutes * CHECK_CREDIT_SHARE
+  );
+  return Math.min(1, (stat.doneMinutes + credit) / stat.plannedMinutes);
 }
 
 // ---------------------------------------------------------------------------

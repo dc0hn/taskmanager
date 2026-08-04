@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   areaStandingFor,
   areaTotals,
+  CHECK_XP,
+  CHECK_XP_DAILY_CAP,
+  CHECK_CREDIT_SHARE,
   brassEarned,
   BRASS_PER_XP,
   comboMultiplier,
@@ -32,7 +35,9 @@ import {
   xpForLevel,
   xpToNextLevel,
   xpToReachLevel,
+  NO_MODIFIERS,
 } from './progress';
+import { STREAK_THRESHOLD } from './streaks';
 import { DEFAULT_CATEGORIES } from './types';
 import type { Block, DailyStat } from './types';
 
@@ -1144,5 +1149,151 @@ describe('piecework — brass for precision', () => {
     // not depend on that, and the `Math.max(1, ...)` floor is easy to get wrong.
     const r = reckonDay('2026-07-30', [], CATS);
     expect(r.stat.brassEarned).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkmarks in the score
+// ---------------------------------------------------------------------------
+
+describe('checkmark XP', () => {
+  const day = (checks: number) =>
+    reckonDay('2026-08-04', [], DEFAULT_CATEGORIES, { ...NO_MODIFIERS, checks });
+
+  it('pays a flat amount per check', () => {
+    expect(day(1).stat.xpEarned).toBe(CHECK_XP);
+    expect(day(3).stat.xpEarned).toBe(CHECK_XP * 3);
+  });
+
+  it('caps the day, so a list of trivia cannot out-earn real work', () => {
+    // The Goodhart guard. Without it, twenty one-second checkmarks would beat an
+    // afternoon of focus.
+    expect(day(50).stat.xpEarned).toBe(CHECK_XP_DAILY_CAP);
+    expect(day(100).stat.xpEarned).toBe(CHECK_XP_DAILY_CAP);
+  });
+
+  it('is worth far less than real work', () => {
+    const focus = reckonDay(
+      '2026-08-04',
+      [block({ start: 540, end: 630, category: 'deep', completed: true, completedAt: 630 })],
+      DEFAULT_CATEGORIES
+    );
+    expect(day(5).stat.xpEarned).toBeLessThan(focus.stat.xpEarned);
+  });
+
+  it('adds no minutes anywhere', () => {
+    // A checkmark is not time. Every hours figure in the app reads doneMinutes.
+    const r = day(5);
+    expect(r.stat.doneMinutes).toBe(0);
+    expect(r.stat.plannedMinutes).toBe(0);
+    expect(r.stat.focusMinutes).toBe(0);
+    expect(r.stat.completedCount).toBe(0);
+  });
+
+  it('appears as its own auditable line', () => {
+    const line = day(3).lines.find((l) => l.id.endsWith(':checks'));
+    expect(line).toMatchObject({ label: 'Checkmarks × 3', xp: 24, minutes: 0 });
+  });
+
+  it('says so on the line when the cap bites', () => {
+    const line = day(9).lines.find((l) => l.id.endsWith(':checks'))!;
+    expect(line.notes).toContain('daily cap reached');
+  });
+
+  it('records the count on the stat, and omits it when there are none', () => {
+    expect(day(3).stat.checks).toBe(3);
+    expect(day(0).stat.checks).toBeUndefined();
+  });
+
+  it('changes nothing for every caller that does not pass checks', () => {
+    const withMods = reckonDay('2026-08-04', [], DEFAULT_CATEGORIES, NO_MODIFIERS);
+    const without = reckonDay('2026-08-04', [], DEFAULT_CATEGORIES);
+    expect(withMods.stat).toEqual(without.stat);
+    expect(without.stat.xpEarned).toBe(0);
+  });
+
+  it('is doubled by a boosted day, like everything else that pays', () => {
+    const plain = day(3).stat.xpEarned;
+    const boosted = reckonDay('2026-08-04', [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 3, boost: 2,
+    }).stat.xpEarned;
+    expect(boosted).toBe(plain * 2);
+  });
+
+  it('reconciles by delta, so ticking one later adds exactly its worth', () => {
+    // The property that lets a check at 00:30 credit the right day without a special
+    // path: the day is re-reckoned and only the difference applied.
+    const before = reckonDay('2026-08-04', [], DEFAULT_CATEGORIES, NO_MODIFIERS).stat;
+    const after = day(1).stat;
+    expect(after.xpEarned - before.xpEarned).toBe(CHECK_XP);
+  });
+});
+
+describe('checkmarks and the streak threshold', () => {
+  const stat = (over: Partial<DailyStat>): DailyStat => ({
+    date: '2026-08-04',
+    plannedMinutes: 0,
+    doneMinutes: 0,
+    xpEarned: 0,
+    brassEarned: 0,
+    bestCombo: 0,
+    cleared: false,
+    completedCount: 0,
+    focusMinutes: 0,
+    ...over,
+  });
+
+  it('helps a real day over the line', () => {
+    // 300 planned, 150 done is 0.50 — short of 0.6. Three checks add 30 credit.
+    expect(dayScore(stat({ plannedMinutes: 300, doneMinutes: 150 }))).toBeCloseTo(0.5, 5);
+    expect(
+      dayScore(stat({ plannedMinutes: 300, doneMinutes: 150, checks: 3 }))
+    ).toBeCloseTo(0.6, 5);
+  });
+
+  it('CANNOT carry a day alone, however many are ticked', () => {
+    // The whole point of the share cap. Checks contribute at most 0.4 of the day and
+    // the threshold is 0.6, so real work is always required — at any count, on any
+    // size of day.
+    for (const checks of [1, 5, 20, 500]) {
+      for (const plannedMinutes of [30, 120, 300, 600]) {
+        const score = dayScore(stat({ plannedMinutes, doneMinutes: 0, checks }));
+        expect(score, `${checks} checks, ${plannedMinutes} min`).toBeLessThanOrEqual(
+          CHECK_CREDIT_SHARE
+        );
+        expect(score).toBeLessThan(STREAK_THRESHOLD);
+      }
+    }
+  });
+
+  it('binds the share cap once there are enough checks to hit it', () => {
+    // Twelve checks is 120 credit; 0.4 of a 300-minute day is also 120, so beyond
+    // twelve the ceiling is what limits them rather than the per-check rate.
+    expect(dayScore(stat({ plannedMinutes: 300, doneMinutes: 0, checks: 12 }))).toBeCloseTo(
+      CHECK_CREDIT_SHARE, 5
+    );
+    expect(dayScore(stat({ plannedMinutes: 300, doneMinutes: 0, checks: 99 }))).toBeCloseTo(
+      CHECK_CREDIT_SHARE, 5
+    );
+  });
+
+  it('cannot rescue a tiny plan either', () => {
+    // Without the share cap, 30 minutes planned and three checks would score 1.0.
+    const score = dayScore(stat({ plannedMinutes: 30, doneMinutes: 0, checks: 5 }));
+    expect(score).toBeCloseTo(CHECK_CREDIT_SHARE, 5);
+  });
+
+  it('leaves a day with nothing planned at zero, so it stays neutral', () => {
+    // classifyDay returns 'neutral' for an unplanned day — there was nothing to fail.
+    // Checks must not turn that into a scored day in either direction.
+    expect(dayScore(stat({ plannedMinutes: 0, checks: 5 }))).toBe(0);
+  });
+
+  it('scores a stat with no checks exactly as before', () => {
+    expect(dayScore(stat({ plannedMinutes: 300, doneMinutes: 180 }))).toBeCloseTo(0.6, 5);
+  });
+
+  it('never exceeds one', () => {
+    expect(dayScore(stat({ plannedMinutes: 100, doneMinutes: 100, checks: 5 }))).toBe(1);
   });
 });

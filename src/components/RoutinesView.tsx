@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Flame, Pause, Play, Plus, Repeat, Trash2 } from 'lucide-react';
+import {
+  CheckSquare,
+  Clock3,
+  Flame,
+  Pause,
+  Play,
+  Plus,
+  Repeat,
+  Trash2,
+} from 'lucide-react';
 import type { CategoryDef, HabitStore, RecurrenceRule, RecurringTask } from '../types';
 import { allStatuses, describeRule } from '../recurrence';
 import { colorsFor } from '../utils/color';
@@ -146,13 +155,22 @@ export default function RoutinesView({
                         {template.label}
                       </div>
                       <div className="font-mono text-[10.5px] text-ink-3 tnum mt-0.5">
-                        {formatDuration(template.duration)}
-                        {template.fixedTime != null &&
-                          ` · at ${String(Math.floor(template.fixedTime / 60)).padStart(
-                            2,
-                            '0'
-                          )}:${String(template.fixedTime % 60).padStart(2, '0')}`}
-                        {template.priority === 'high' && ' · high'}
+                        {/* A checkmark has no duration and no anchor, so quoting either
+                            would describe a schedule it is deliberately not in. */}
+                        {template.checkmark ? (
+                          'anytime · not scheduled'
+                        ) : (
+                          <>
+                            {formatDuration(template.duration)}
+                            {template.fixedTime != null &&
+                              ` · at ${String(
+                                Math.floor(template.fixedTime / 60)
+                              ).padStart(2, '0')}:${String(
+                                template.fixedTime % 60
+                              ).padStart(2, '0')}`}
+                            {template.priority === 'high' && ' · high'}
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -179,6 +197,43 @@ export default function RoutinesView({
                     </div>
 
                     <div className="flex items-center gap-0.5 shrink-0">
+                      {/* Timed block or checkmark. `duration` is kept either way, so
+                          switching back restores what the routine was rather than
+                          resetting it to a default. */}
+                      <button
+                        onClick={() =>
+                          onUpdate(template.id, {
+                            checkmark: template.checkmark ? undefined : true,
+                          })
+                        }
+                        aria-pressed={template.checkmark === true}
+                        title={
+                          template.checkmark
+                            ? 'A checkmark — ticked any time, never scheduled. Click to put it back on the grid.'
+                            : 'A timed block. Click to make it a checkmark instead.'
+                        }
+                        className="inline-flex items-center gap-1.5 px-2 h-7 rounded-md text-[11px] font-medium transition-all"
+                        style={{
+                          background: template.checkmark
+                            ? 'var(--signal-dim)'
+                            : 'rgba(245, 242, 236,0.035)',
+                          border: `1px solid ${
+                            template.checkmark ? 'var(--signal-line)' : 'var(--rule-2)'
+                          }`,
+                          color: template.checkmark ? 'var(--signal)' : 'var(--bone-2)',
+                        }}
+                      >
+                        {/* Labelled, not a bare icon. Two glyphs that differ only in
+                            shape are indistinguishable in a row of other icon buttons,
+                            and this one changes whether the routine is scheduled at
+                            all — which is too large a consequence to hide in a tooltip. */}
+                        {template.checkmark ? (
+                          <CheckSquare size={11} strokeWidth={2.2} />
+                        ) : (
+                          <Clock3 size={11} strokeWidth={2} />
+                        )}
+                        {template.checkmark ? 'Checkmark' : 'Timed'}
+                      </button>
                       <button
                         onClick={() => onUpdate(template.id, { active: !template.active })}
                         aria-label={template.active ? 'Pause routine' : 'Resume routine'}
@@ -268,6 +323,7 @@ function RoutineForm({
   const [days, setDays] = useState<number[]>([1, 3, 5]);
   const [fixedTime, setFixedTime] = useState('');
   const [priority, setPriority] = useState<'high' | 'normal'>('normal');
+  const [checkmark, setCheckmark] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
@@ -276,7 +332,10 @@ function RoutineForm({
       setError('Give the routine a name.');
       return;
     }
-    if (!Number.isFinite(d) || d <= 0) {
+    // A checkmark has no duration, so it is not asked for one and not validated for
+    // one. Requiring a number here would be the form insisting on a fact about the
+    // thing that the whole point of a checkmark is that it does not have.
+    if (!checkmark && (!Number.isFinite(d) || d <= 0)) {
       setError('How long does it take? Enter a number of minutes above zero.');
       return;
     }
@@ -301,12 +360,15 @@ function RoutineForm({
       id: uid(),
       label: label.trim(),
       category,
-      duration: Math.round(d),
-      priority,
-      fixedTime: ft,
+      // Kept even for a checkmark, so switching it to a timed block later has a
+      // sensible length to start from rather than a zero.
+      duration: checkmark ? 15 : Math.round(d),
+      priority: checkmark ? 'normal' : priority,
+      fixedTime: checkmark ? undefined : ft,
       rule,
       createdOn: toDateKey(new Date()),
       active: true,
+      checkmark: checkmark ? true : undefined,
     });
   }
 
@@ -323,6 +385,34 @@ function RoutineForm({
             placeholder="Stretch"
             className="input w-full text-[13.5px] px-2.5 py-2 focus:outline-none"
           />
+        </div>
+
+        {/* Asked BEFORE the fields it governs, because choosing Checkmark removes
+            three of them. Putting it lower would have you fill in a duration and a
+            time and then watch them disappear. */}
+        <div className="md:col-span-2">
+          <Label>How it appears</Label>
+          <div className="segmented">
+            <button
+              data-active={!checkmark}
+              onClick={() => setCheckmark(false)}
+              className="segmented-item"
+            >
+              Timed block
+            </button>
+            <button
+              data-active={checkmark}
+              onClick={() => setCheckmark(true)}
+              className="segmented-item"
+            >
+              Checkmark
+            </button>
+          </div>
+          <p className="text-[11.5px] text-ink-3 mt-1.5 leading-snug max-w-[52ch]">
+            {checkmark
+              ? 'Never scheduled. It appears in the Anytime strip above the day and can be ticked at any hour — including after your shutdown time, or before 4am for the day that just ended.'
+              : 'Placed on the grid by the scheduler, with a duration and a slot.'}
+          </p>
         </div>
 
         <div className="md:col-span-2">
@@ -397,6 +487,7 @@ function RoutineForm({
           </div>
         </div>
 
+        {!checkmark && (
         <div>
           <Label>Takes</Label>
           <div className="flex items-center gap-1.5">
@@ -409,7 +500,9 @@ function RoutineForm({
             <span className="text-[12px] text-ink-3">minutes</span>
           </div>
         </div>
+        )}
 
+        {!checkmark && (
         <div className="flex gap-2 items-end">
           <div className="flex-1">
             <Label>At a set time (optional)</Label>
@@ -435,6 +528,7 @@ function RoutineForm({
             {priority === 'high' ? 'High' : 'Normal'}
           </button>
         </div>
+        )}
       </div>
 
       {error && <p className="text-[12.5px] text-bad mt-2.5">{error}</p>}

@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   allStatuses,
+  checkDateFor,
+  checkmarksDueOn,
+  checksOn,
   describeRule,
   dueStatuses,
+  inGraceWindow,
+  isChecked,
+  setChecked,
   isCompletedOn,
   matchesRule,
   pruneCompletions,
@@ -409,5 +415,127 @@ describe('taskFromTemplate', () => {
     const a = taskFromTemplate(tpl());
     const b = taskFromTemplate(tpl());
     expect(a.id).not.toBe(b.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkmarks — recurring things with no slot
+// ---------------------------------------------------------------------------
+
+describe('checkmarks', () => {
+  const water = (over: Partial<RecurringTask> = {}): RecurringTask => ({
+    id: 'water',
+    label: 'Gallon of water',
+    category: 'break',
+    duration: 15,
+    priority: 'normal',
+    rule: { kind: 'daily' },
+    createdOn: '2026-01-01',
+    active: true,
+    checkmark: true,
+    ...over,
+  });
+
+  const DAY = '2026-08-04';
+
+  it('never reaches the scheduler', () => {
+    // The single most important property. `dueStatuses` is the one place routines are
+    // offered to a day, so filtering here keeps a checkmark out of the intake, the
+    // suggestion chips and the build at once.
+    const store = {
+      templates: [water(), water({ id: 'timed', label: 'Stretch', checkmark: undefined })],
+      completions: [],
+    };
+    const due = dueStatuses(store, DAY, new Set());
+    expect(due.map((d) => d.template.id)).toEqual(['timed']);
+  });
+
+  it('lists as a checkmark instead', () => {
+    const templates = [water(), water({ id: 'timed', checkmark: undefined })];
+    expect(checkmarksDueOn(templates, DAY).map((t) => t.id)).toEqual(['water']);
+  });
+
+  it('respects the recurrence rule', () => {
+    // 2026-08-04 is a Tuesday.
+    const monday = water({ rule: { kind: 'days', days: [1] } });
+    expect(checkmarksDueOn([monday], DAY)).toEqual([]);
+    expect(checkmarksDueOn([monday], '2026-08-03')).toHaveLength(1);
+  });
+
+  it('ticks and unticks idempotently', () => {
+    let c: RecurringCompletion[] = [];
+    c = setChecked(c, 'water', DAY, true);
+    c = setChecked(c, 'water', DAY, true);
+    expect(c).toHaveLength(1);
+    expect(isChecked(c, 'water', DAY)).toBe(true);
+
+    c = setChecked(c, 'water', DAY, false);
+    c = setChecked(c, 'water', DAY, false);
+    expect(c).toEqual([]);
+  });
+
+  it('records no minutes, so every hours figure stays honest', () => {
+    const c = setChecked([], 'water', DAY, true);
+    expect(c[0]).toEqual({ templateId: 'water', date: DAY, minutes: 0, checked: true });
+  });
+
+  it('SURVIVES the block reconcile that runs on every change to the day', () => {
+    // The bug this prevents: `reconcileCompletions` rebuilds a day from its blocks and
+    // drops everything else for that date. A checkmark has no block, so without the
+    // `checked` guard every tick would vanish the next time anything touched the day.
+    const withCheck = setChecked([], 'water', DAY, true);
+    const after = reconcileCompletions(withCheck, DAY, []);
+    expect(isChecked(after, 'water', DAY)).toBe(true);
+  });
+
+  it('still lets block-derived completions be rebuilt', () => {
+    const stale = [{ templateId: 'timed', date: DAY, minutes: 30 }];
+    const after = reconcileCompletions(stale, DAY, []);
+    expect(after).toEqual([]);
+  });
+
+  it('counts checks for a day without counting block completions', () => {
+    const mixed = [
+      { templateId: 'water', date: DAY, minutes: 0, checked: true },
+      { templateId: 'vitamins', date: DAY, minutes: 0, checked: true },
+      { templateId: 'timed', date: DAY, minutes: 30 },
+      { templateId: 'water', date: '2026-08-03', minutes: 0, checked: true },
+    ];
+    expect(checksOn(mixed, DAY)).toBe(2);
+  });
+
+  it('feeds the routine’s own streak like any other completion', () => {
+    const completions = [
+      setChecked([], 'water', '2026-08-02', true),
+      setChecked([], 'water', '2026-08-03', true),
+      setChecked([], 'water', DAY, true),
+    ].flat();
+    const streak = streakFor(water(), completions, new Date('2026-08-04T12:00:00'));
+    expect(streak.current).toBe(3);
+    expect(streak.doneToday).toBe(true);
+  });
+});
+
+describe('the grace window', () => {
+  const at = (iso: string) => new Date(iso);
+
+  it('credits the previous day before 4am', () => {
+    expect(checkDateFor(at('2026-08-05T00:30:00'))).toBe('2026-08-04');
+    expect(checkDateFor(at('2026-08-05T03:59:00'))).toBe('2026-08-04');
+    expect(inGraceWindow(at('2026-08-05T00:30:00'))).toBe(true);
+  });
+
+  it('credits today from 4am onward', () => {
+    expect(checkDateFor(at('2026-08-05T04:00:00'))).toBe('2026-08-05');
+    expect(checkDateFor(at('2026-08-05T13:00:00'))).toBe('2026-08-05');
+    expect(inGraceWindow(at('2026-08-05T04:00:00'))).toBe(false);
+  });
+
+  it('crosses a month boundary correctly', () => {
+    expect(checkDateFor(at('2026-09-01T01:00:00'))).toBe('2026-08-31');
+  });
+
+  it('crosses a year boundary correctly', () => {
+    expect(checkDateFor(at('2027-01-01T02:00:00'))).toBe('2026-12-31');
   });
 });
