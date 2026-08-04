@@ -333,7 +333,15 @@ export function areaStandingFor(xp: number): AreaStanding {
 // Scoring a day
 // ---------------------------------------------------------------------------
 
-function kindOf(categoryId: string, categories: CategoryDef[]): CategoryKind {
+/**
+ * A category's kind, with a safe fallback for one that has been deleted.
+ *
+ * THE ONE IMPLEMENTATION. There were three — here, in badges.ts and in insights.ts —
+ * identical today and each free to drift tomorrow. Exported rather than duplicated for
+ * the reason `utils/time.ts` states about its own consolidation: a pair that happens
+ * to agree is exactly the pair that fails in one place only.
+ */
+export function kindOf(categoryId: string, categories: CategoryDef[]): CategoryKind {
   return (categories.find((c) => c.id === categoryId) ?? UNKNOWN_CATEGORY).kind;
 }
 

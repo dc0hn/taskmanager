@@ -1,6 +1,6 @@
 import type { AwardLedger, AwardPayout, Block, CategoryDef, DailyStat, DayPlan } from './types';
 import { UNKNOWN_CATEGORY } from './types';
-import { scorable, wasOnTime } from './progress';
+import { kindOf, scorable, wasOnTime } from './progress';
 import { weekdayOf } from './week';
 
 // ============================================================================
@@ -60,9 +60,7 @@ interface InsightRule {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function kindOf(categoryId: string, categories: CategoryDef[]): string {
-  return (categories.find((c) => c.id === categoryId) ?? UNKNOWN_CATEGORY).kind;
-}
+
 
 function labelOf(categoryId: string, categories: CategoryDef[]): string {
   return (categories.find((c) => c.id === categoryId) ?? UNKNOWN_CATEGORY).label;

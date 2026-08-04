@@ -100,7 +100,7 @@ function QuestTile({ quest, awards }: { quest: Quest; awards: AwardLedger }) {
 
   return (
     <div
-      className="flex items-start gap-2.5 px-2.5 py-2"
+      className="flex items-start gap-2.5 px-2.5 py-2 min-w-0"
       style={{
         background: quest.complete ? 'var(--chassis-2)' : 'var(--chassis-1)',
         border: `1px solid ${quest.complete ? 'var(--signal-line)' : 'var(--rule-1)'}`,

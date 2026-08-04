@@ -1,5 +1,6 @@
 import type { DayDigest } from './digest';
 import { DEEP_BLOCK_MIN } from './digest';
+import { weekdayOf } from '../week';
 
 // ============================================================================
 // The metric battery
@@ -338,8 +339,4 @@ export function byWeekday(days: DayDigest[]): {
   return out;
 }
 
-/** 0 = Sunday. UTC, so the label of a date never depends on the reader's timezone. */
-function weekdayOf(date: string): number {
-  const [y, m, d] = date.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-}
+

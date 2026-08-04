@@ -38,8 +38,21 @@ import { addWeeks, toWeekKey } from './week';
  */
 export function goalProgress(goal: WeeklyGoal, credits: GoalCredit[]): GoalProgress {
   const mine = credits.filter((c) => c.goalId === goal.id);
-  const days = new Set(mine.map((c) => c.date));
-  const sessions = days.size;
+
+  // Two counting rules, because they answer to two different hazards.
+  //
+  // BLOCK credits count by distinct DATE, for the reason above: the scheduler splits
+  // long focus work into chunks, so one sitting can be three blocks.
+  //
+  // CHECKED credits count INDIVIDUALLY. A tick is an explicit act, not a chunk of
+  // something larger, and the distinct-date rule made any target above seven a week
+  // unreachable — fourteen walks cannot be recorded in seven days when the fourteenth
+  // walk is invisible. That was silent: the app accepted the target and then made it
+  // impossible, with nothing anywhere saying so.
+  const checked = mine.filter((c) => c.checked === true);
+  const fromBlocks = new Set(mine.filter((c) => c.checked !== true).map((c) => c.date));
+  const sessions = fromBlocks.size + checked.length;
+
   const minutes = mine.reduce((sum, c) => sum + c.minutes, 0);
   const done = goal.targetKind === 'sessions' ? sessions : minutes;
   const target = Math.max(1, goal.target);
@@ -193,7 +206,75 @@ export function openGoals(week: WeekRecord): GoalProgress[] {
     // A ceiling is never work to do. Offering an intake chip for one would invite more of
     // the thing you are trying to hold down, which is the opposite of what it is for.
     (p) => p.goal.direction !== 'atMost' && p.outcome !== 'met' && p.outcome !== 'void'
+      // A checkmark is not scheduled work, so it must not appear in the intake — that
+      // is the entire point of marking it one.
+      && p.goal.checkmark !== true
   );
+}
+
+// ---------------------------------------------------------------------------
+// Checkmark goals
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a goal can be a checkmark at all.
+ *
+ * A tick carries no minutes, so a minutes target could never be satisfied by one —
+ * offering the switch there would be the app promising something it cannot do.
+ * Ceilings are excluded for the same reason they get no intake chip: ticking off
+ * progress toward a limit you are trying to stay under is nonsense.
+ */
+export function checkmarkable(goal: WeeklyGoal): boolean {
+  return goal.targetKind === 'sessions' && goal.direction !== 'atMost';
+}
+
+/** The week's checkmark goals, in the order they were set. */
+export function checkmarkGoals(week: WeekRecord): WeeklyGoal[] {
+  return week.goals.filter((g) => g.checkmark === true && g.voided !== true);
+}
+
+/** How many times a checkmark goal has been ticked on a date. */
+export function checksForGoal(
+  credits: GoalCredit[],
+  goalId: string,
+  date: string
+): number {
+  return credits.filter(
+    (c) => c.goalId === goalId && c.date === date && c.checked === true
+  ).length;
+}
+
+/**
+ * Add or remove one tick for a goal on a date.
+ *
+ * Counts UP rather than toggling, because a goal like "fourteen walks" is ticked twice
+ * on a good day. Each tick is its own credit with its own id, so removing one takes
+ * away exactly one rather than clearing the day.
+ */
+export function addGoalCheck(
+  credits: GoalCredit[],
+  goalId: string,
+  date: string,
+  blockId: string
+): GoalCredit[] {
+  return [...credits, { goalId, blockId, date, minutes: 0, checked: true }];
+}
+
+export function removeGoalCheck(
+  credits: GoalCredit[],
+  goalId: string,
+  date: string
+): GoalCredit[] {
+  const index = credits.findIndex(
+    (c) => c.goalId === goalId && c.date === date && c.checked === true
+  );
+  if (index < 0) return credits;
+  return [...credits.slice(0, index), ...credits.slice(index + 1)];
+}
+
+/** Every tick on a date, across all goals — what the day's XP counts. */
+export function goalChecksOn(credits: GoalCredit[], date: string): number {
+  return credits.filter((c) => c.date === date && c.checked === true).length;
 }
 
 /** Stand a goal down for this week, or undo that. */
@@ -251,8 +332,10 @@ export function reconcileCredits(
     .map((b) => creditFor(b, date))
     .filter((c): c is GoalCredit => c !== null);
 
-  // Drop every prior credit for this date, then re-add what is currently true.
-  const others = credits.filter((c) => c.date !== date);
+  // Drop every prior credit for this date, then re-add what is currently true —
+  // EXCEPT ticks, which have no block to be rebuilt from and would otherwise be erased
+  // by the next change to the day.
+  const others = credits.filter((c) => c.date !== date || c.checked === true);
   return [...others, ...earned];
 }
 
@@ -379,11 +462,17 @@ export function issueRecurringGoals(
     weeks.find((w) => w.week === currentWeek) ?? emptyWeek(currentWeek);
   const present = new Set(current.goals.map((g) => g.id));
 
+  // Tombstones from this week and the one before it. Carried forward because a goal
+  // deleted three weeks ago is still sitting in the week behind this one, waiting to
+  // be reissued — the removal has to outlive the record it was removed from.
+  const dismissed = new Set([...(current.dismissed ?? []), ...(prior.dismissed ?? [])]);
+
   const additions: WeeklyGoal[] = [];
   for (const progress of weekProgress(prior)) {
     const goal = progress.goal;
     if (goal.cadence !== 'weekly' || goal.active === false) continue;
     if (present.has(goal.id)) continue;
+    if (dismissed.has(goal.id)) continue;
 
     const slipped = progress.outcome === 'partial' || progress.outcome === 'missed';
     additions.push({
@@ -401,8 +490,54 @@ export function issueRecurringGoals(
     });
   }
 
-  if (additions.length === 0) return null;
-  return { ...current, goals: [...current.goals, ...additions] };
+  // A tombstone is only worth keeping while the goal could still be reissued — that
+  // is, while it is still in the week behind this one. Once it falls out of the prior
+  // week it can never come back, so the marker is dropped and the list self-prunes
+  // instead of growing for the life of the profile.
+  const priorIds = new Set(prior.goals.map((g) => g.id));
+  const carried = [...dismissed].filter((id) => priorIds.has(id));
+  const dismissedChanged =
+    carried.length !== (current.dismissed?.length ?? 0) ||
+    carried.some((id) => !(current.dismissed ?? []).includes(id));
+
+  if (additions.length === 0 && !dismissedChanged) return null;
+  return {
+    ...current,
+    goals: [...current.goals, ...additions],
+    dismissed: carried.length > 0 ? carried : undefined,
+  };
+}
+
+/**
+ * Take a goal off the week and remember that it was deliberate.
+ *
+ * Only weekly-cadence goals leave a tombstone: a one-off is never reissued, so marking
+ * it would be a record of nothing. Removing it from `goals` alone was the bug — the
+ * prior week still held it and the next rollover put it straight back.
+ */
+export function removeGoalFromWeek(week: WeekRecord, goalId: string): WeekRecord {
+  const goal = week.goals.find((g) => g.id === goalId);
+  const goals = week.goals.filter((g) => g.id !== goalId);
+  if (!goal || goal.cadence !== 'weekly') return { ...week, goals };
+
+  const dismissed = [...new Set([...(week.dismissed ?? []), goalId])];
+  return { ...week, goals, dismissed };
+}
+
+/**
+ * Put a goal on the week, clearing any tombstone for it.
+ *
+ * The clear matters when the id is REUSED — pulling a goal back out of carryover keeps
+ * its id, so without this it would be added and then removed again by the next
+ * rollover, which reads as the app refusing to accept it.
+ */
+export function addGoalToWeek(week: WeekRecord, goal: WeeklyGoal): WeekRecord {
+  const dismissed = (week.dismissed ?? []).filter((id) => id !== goal.id);
+  return {
+    ...week,
+    goals: [...week.goals, goal],
+    dismissed: dismissed.length > 0 ? dismissed : undefined,
+  };
 }
 
 /**

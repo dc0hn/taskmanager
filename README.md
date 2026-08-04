@@ -223,3 +223,33 @@ npm test
 year boundaries, 53-week years, leap days and DST transitions), goal crediting and
 rollover idempotency and consolidation, weekly reissue, void handling, and recurrence
 and streak logic.
+
+## Distribution
+
+Builds are **ad-hoc signed** (`Signature=adhoc`, no Team ID) and not notarized. That is
+fine for a build you install on your own machine, which is what this is for.
+
+Gatekeeper will refuse it on any other Mac. Sharing the app would need, in order:
+
+1. An Apple Developer Program membership, for a Developer ID Application certificate.
+2. `bundle.macOS.signingIdentity` and `hardenedRuntime: true` in `src-tauri/tauri.conf.json`.
+3. Notarization via `APPLE_ID`, `APPLE_TEAM_ID` and an app-specific `APPLE_PASSWORD`.
+
+There is also **no update channel** — no `updater` config, no endpoint, no signing key.
+Updates happen by rebuilding and copying to `/Applications`. An updater without a signed
+public key would be worse than none, so it is deliberately absent rather than half-built.
+
+## Data and storage
+
+Everything lives in `localStorage` (a WebKit SQLite file under
+`~/Library/WebKit/com.dc0hn.almanac/`), plus a daily JSON snapshot in the app data
+directory written fsync-then-rename with one generation kept.
+
+Day plans and week records are **never pruned** — they are the primary record of what
+you did. Sealed month and season summaries are dropped after five years. The backup
+panel shows the store's size against the ~5 MB quota so the ceiling is visible before
+it is reached; export a backup if it starts to fill.
+
+Storage is plaintext by design: it is a local single-user app and there are no
+credentials to protect. Editing your own data files is possible and is a consciously
+accepted trade, not a vulnerability.

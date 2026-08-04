@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { X } from 'lucide-react';
+import { TriangleAlert, X } from 'lucide-react';
 import SideNav, { type NavKey } from './components/SideNav';
 import Toolbar from './components/Toolbar';
 import TimeGrid from './components/TimeGrid';
@@ -61,7 +61,10 @@ import type {
   WeekRecord,
 } from './types';
 import {
+  corruptPlanDates,
   listPlanDates,
+  pruneDerivedRecords,
+  setWriteFailureHandler,
   loadCarryover,
   loadCategories,
   loadDayMarkDefs,
@@ -170,6 +173,7 @@ import {
   weekdayMedians,
   type DayModifiers,
   isScored,
+  CHECK_XP,
   NO_MODIFIERS,
   standingFor,
 } from './progress';
@@ -213,12 +217,12 @@ import {
 } from './reflow';
 import { clearToIntake, hasClearableBlocks } from './unschedule';
 import StudyView from './components/StudyView';
-import CheckmarkStrip from './components/CheckmarkStrip';
+import CheckmarkStrip, { type CheckItem } from './components/CheckmarkStrip';
 import { buildBriefing, parseFindings } from './study/briefing';
 import { revise as reviseProfile, type Answers } from './study/profile';
 import { flushNow, installRecorder, record } from './study/recorder';
 import { append, trimRaw } from './study/ledger';
-import { digestFinishedDays, pruneDigests } from './study/digest';
+import { digestFinishedDays, pruneDigests, selfCheck } from './study/digest';
 import {
   buildWeekReview,
   dropFromCarryover,
@@ -226,6 +230,12 @@ import {
   issueRecurringGoals,
   goalRunPayouts,
   openGoals as openGoalsOf,
+  addGoalCheck,
+  addGoalToWeek,
+  removeGoalFromWeek,
+  checkmarkGoals,
+  checksForGoal,
+  goalChecksOn,
   outcomeHistory,
   pruneCredits,
   pullFromCarryover,
@@ -424,6 +434,17 @@ export default function App() {
     plansRef.current = plans;
   });
 
+  // The same live-mirror pattern, for the records undo now captures. Read only from
+  // callbacks, never during render.
+  const habitsRef = useRef(habits);
+  const categoriesRef = useRef(categories);
+  const weekRef = useRef(week);
+  useEffect(() => {
+    habitsRef.current = habits;
+    categoriesRef.current = categories;
+    weekRef.current = week;
+  });
+
   /**
    * The rules a build runs under, including what the history says when the setting is on.
    *
@@ -531,6 +552,10 @@ export default function App() {
   useEffect(() => {
     const idle = window.setTimeout(() => {
       void snapshotIfDue(todayKey);
+      // Sealed month and season summaries past the horizon. Day plans and week
+      // records are NEVER pruned — they are the primary record of what you did, and
+      // the backup panel's size readout is what makes their growth visible instead.
+      pruneDerivedRecords(todayKey);
     }, 4000);
     return () => window.clearTimeout(idle);
   }, [todayKey]);
@@ -539,6 +564,23 @@ export default function App() {
   const [overflowReasons, setOverflowReasons] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  /**
+   * Storage failures reach the user rather than only the console.
+   *
+   * Release builds register no log sink, so `console.error` went nowhere anyone would
+   * look — a full quota or a locked store looked exactly like a successful save until
+   * the app was closed and the work was not there. Installed once, at mount.
+   */
+  useEffect(() => {
+    setWriteFailureHandler((key) => {
+      setToast(
+        `Could not save (${key.replace(/^dp:/, '')}). Your recent changes may not persist — export a backup.`
+      );
+    });
+    return () => setWriteFailureHandler(null);
+  }, []);
+
   const [hoursOpen, setHoursOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [marksOpen, setMarksOpen] = useState(false);
@@ -807,12 +849,29 @@ export default function App() {
   // than leaving an empty plan behind.
   // -------------------------------------------------------------------------
   const UNDO_DEPTH = 25;
-  type UndoTx = { label: string; days: Record<string, DayPlan | null> };
+  /**
+   * A transaction spans DAYS and SIDE RECORDS.
+   *
+   * Undo used to cover day plans only, while the button sat in the toolbar implying
+   * more — deleting a routine, a goal or a category was permanent and looked exactly
+   * as reversible as moving a block. Each side record is captured whole because they
+   * are small and because a whole-record swap has no partial-restore failure mode.
+   *
+   * Shop purchases stay out deliberately: spending brass is a decision rather than an
+   * edit, and an undo that refunded it would make the shop a fitting room.
+   */
+  type UndoTx = {
+    label: string;
+    days: Record<string, DayPlan | null>;
+    weeks?: Record<string, WeekRecord>;
+    habits?: HabitStore;
+    categories?: CategoryDef[];
+  };
   const undoStack = useRef<UndoTx[]>([]);
   const pendingTx = useRef<UndoTx | null>(null);
   const [undoCount, setUndoCount] = useState(0);
 
-  const recordUndo = useCallback((day: string, label: string) => {
+  const openTx = useCallback((label: string): UndoTx => {
     if (pendingTx.current == null) {
       pendingTx.current = { label, days: {} };
       queueMicrotask(() => {
@@ -823,9 +882,45 @@ export default function App() {
         setUndoCount(undoStack.current.length);
       });
     }
-    const tx = pendingTx.current;
-    if (!(day in tx.days)) tx.days[day] = plansRef.current[day] ?? null;
+    return pendingTx.current;
   }, []);
+
+  const recordUndo = useCallback(
+    (day: string, label: string) => {
+      const tx = openTx(label);
+      if (!(day in tx.days)) tx.days[day] = plansRef.current[day] ?? null;
+    },
+    [openTx]
+  );
+
+  /**
+   * Capture a side record before changing it. First capture of a gesture wins, exactly
+   * as for days — a later one would already hold half the change being undone.
+   */
+  const recordWeekUndo = useCallback(
+    (weekKey: string, label: string) => {
+      const tx = openTx(label);
+      tx.weeks ??= {};
+      if (!(weekKey in tx.weeks)) tx.weeks[weekKey] = loadWeek(weekKey);
+    },
+    [openTx]
+  );
+
+  const recordHabitsUndo = useCallback(
+    (label: string) => {
+      const tx = openTx(label);
+      tx.habits ??= habitsRef.current;
+    },
+    [openTx]
+  );
+
+  const recordCategoriesUndo = useCallback(
+    (label: string) => {
+      const tx = openTx(label);
+      tx.categories ??= categoriesRef.current;
+    },
+    [openTx]
+  );
 
   const mutateDay = useCallback(
     (day: string, fn: (plan: DayPlan) => DayPlan, label = 'that change') => {
@@ -857,6 +952,19 @@ export default function App() {
       }
       return next;
     });
+
+    // Side records are written straight back rather than staged, because unlike plans
+    // they have no debounced save to ride on — the store IS the source of truth.
+    if (tx.weeks) {
+      for (const [key, record] of Object.entries(tx.weeks)) {
+        saveWeek(record);
+        if (key === weekRef.current.week) setWeek(record);
+      }
+      setWeekEpoch((n) => n + 1);
+    }
+    if (tx.habits) setHabits(tx.habits);
+    if (tx.categories) setCategories(tx.categories);
+
     setToast(`Undid ${tx.label}.`);
   }, []);
 
@@ -986,12 +1094,52 @@ export default function App() {
   // whose day record had since been trimmed. A date counts as authoritative only
   // once it has a stored record, or once it has blocks in memory.
   // -------------------------------------------------------------------------
+  /**
+   * Days carrying at least one tick.
+   *
+   * Needed because a checkmark is the only thing in this app that can happen on a day
+   * with NOTHING SCHEDULED. Authority was originally "has a stored plan, or has blocks
+   * in memory" — both proxies for "we know what happened here" — and a day whose only
+   * event was ticking the water passed neither, so it was never reconciled and the
+   * tick earned nothing at all.
+   */
+  const checkedDates = useMemo(() => {
+    const out = new Set<string>();
+    for (const c of habits.completions) if (c.checked === true) out.add(c.date);
+    for (const w of loadAllWeeks()) {
+      for (const c of w.credits) if (c.checked === true) out.add(c.date);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [habits.completions, weekEpoch]);
+
+  /**
+   * Dates whose stored record cannot be parsed.
+   *
+   * Recomputed only when the set of stored dates could have changed, because reading
+   * every plan to find out is the one thing this must not do on a render path.
+   */
+  const [corruptDates, setCorruptDates] = useState<string[]>(() => corruptPlanDates());
+  const [corruptDismissed, setCorruptDismissed] = useState(false);
+
+  useEffect(() => {
+    setCorruptDates(corruptPlanDates());
+  }, [todayKey]);
+
   const authoritativeDates = useMemo(() => {
     const stored = new Set(listPlanDates());
+    const unreadable = new Set(corruptDates);
     return loadedDates.filter(
-      (d) => stored.has(d) || (plans[d]?.blocks.length ?? 0) > 0
+      (d) =>
+        // A day we cannot read is EXCLUDED rather than counted as empty. Included, it
+        // would reckon as zero and reconciliation would apply a negative delta —
+        // silently deducting that day's XP from the lifetime total and showing the
+        // calendar an empty day. The same reasoning `withinRetention` embodies: a day
+        // that cannot be measured is left alone, not measured as nothing.
+        !unreadable.has(d) &&
+        (stored.has(d) || (plans[d]?.blocks.length ?? 0) > 0 || checkedDates.has(d))
     );
-  }, [loadedDates, plans]);
+  }, [loadedDates, plans, checkedDates, corruptDates]);
 
   /**
    * Per-day scoring modifiers, built once and shared by every path that scores a day.
@@ -1011,11 +1159,14 @@ export default function App() {
         {
           boost: boostFor(shop, d),
           character: characterOf(byWeek.get(toWeekKey(d))),
-          // Read from the habit log rather than held separately, so a check reconciles
-          // exactly like every other completion — the day is re-reckoned and the
-          // DIFFERENCE applied, which is what makes ticking one at 00:30 credit the
-          // right day's total without any special path.
-          checks: checksOn(habits.completions, d),
+          // Both kinds of tick, from the two logs that hold them. Read here rather
+          // than held separately so a check reconciles exactly like every other
+          // completion — the day is re-reckoned and the DIFFERENCE applied, which is
+          // what makes ticking one at 00:30 credit the right day's total with no
+          // special path.
+          checks:
+            checksOn(habits.completions, d) +
+            goalChecksOn(loadWeek(toWeekKey(d)).credits, d),
         },
       ])
     );
@@ -1027,6 +1178,17 @@ export default function App() {
     // `load*` calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authoritativeDates, shop, weekEpoch, habits.completions]);
+
+  /**
+   * The modifiers, readable from a callback without making it depend on them.
+   *
+   * The check float needs the day's boost, and putting `modifiers` in the toggle's
+   * dependency list would rebuild the handler every time any day's stats moved.
+   */
+  const modifiersRef = useRef<Record<string, DayModifiers>>({});
+  useEffect(() => {
+    modifiersRef.current = modifiers;
+  });
 
   useEffect(() => {
     // A sealed week is settled history. Its outcome has already been folded into
@@ -2010,6 +2172,37 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [todayKey]);
 
+  /**
+   * Make a goal a checkmark, or put it back on the grid.
+   *
+   * Bumps `weekEpoch` because the Anytime strip reads the week record out of storage,
+   * which is not reactive — without it a goal switched to a checkmark would not appear
+   * on the day until something else happened to reload the record.
+   */
+  const handleSetGoalCheckmark = useCallback(
+    (goalId: string, checkmark: boolean) => {
+      recordWeekUndo(goalsWeek, 'that goal change');
+      const apply = (w: WeekRecord): WeekRecord => ({
+        ...w,
+        goals: w.goals.map((g) =>
+          g.id === goalId ? { ...g, checkmark: checkmark ? true : undefined } : g
+        ),
+      });
+      if (goalsWeek === week.week) {
+        setWeek((prev) => {
+          const next = apply(prev);
+          saveWeek(next);
+          return next;
+        });
+      } else {
+        saveWeek(apply(loadWeek(goalsWeek)));
+        setGoalsWeek(goalsWeek);
+      }
+      setWeekEpoch((n) => n + 1);
+    },
+    [goalsWeek, week.week, recordWeekUndo]
+  );
+
   // -------------------------------------------------------------------------
   // The study
   //
@@ -2036,6 +2229,22 @@ export default function App() {
     () => loadStudyFindings(),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [studyEpoch]
+  );
+
+  /**
+   * Sealed digests re-derived and compared. Computed only when the study is on screen,
+   * because it reads a plan per sampled day.
+   */
+  const studyDrift = useMemo(
+    () =>
+      nav === 'study'
+        ? selfCheck(
+            studyDigests,
+            (d) => loadPlan(d).blocks,
+            (id) => categories.find((c) => c.id === id)?.kind === 'focus'
+          )
+        : [],
+    [nav, studyDigests, categories]
   );
 
   const handleSaveProfile = useCallback(
@@ -2110,6 +2319,19 @@ export default function App() {
         : `${added} ${added === 1 ? 'finding' : 'findings'} imported.`
     );
   }, []);
+
+  /**
+   * Checks recorded for the day being viewed, from both logs that hold them.
+   *
+   * The DISPLAYED date rather than the crediting one: this feeds the day's dial, and a
+   * ring for Tuesday that counted a tick made against Monday would be showing one day's
+   * progress under another day's heading.
+   */
+  const checksOnDate = useMemo(
+    () => checksOn(habits.completions, date) + goalChecksOn(loadWeek(toWeekKey(date)).credits, date),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [habits.completions, date, week, weekEpoch]
+  );
 
   /** Is there anything a clear would actually move? */
   const canUnschedule = useMemo(
@@ -2186,20 +2408,75 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [todayKey]);
 
-  const checkmarks = useMemo(
-    () => checkmarksDueOn(habits.templates, checkCredit.date),
-    [habits.templates, checkCredit.date]
-  );
+  /**
+   * Everything tickable today, from both systems that produce such a thing.
+   *
+   * Routines and weekly goals stay separate everywhere else — different periods,
+   * different accounting, different meanings of failure — but they converge here,
+   * because "a thing I do that has no time" is one idea to the person doing it.
+   *
+   * A goal's daily quota is derived from its weekly target: fourteen walks a week is
+   * two a day. Rounded UP, so a target of ten reads as two rather than one and the
+   * week is actually reachable by following the chip.
+   */
+  const checkItems = useMemo(() => {
+    const items: CheckItem[] = [];
+    const graceDate = checkCredit.date;
+    const realDate = todayKey;
 
-  const checkedToday = useMemo(
-    () =>
-      new Set(
-        checkmarks
-          .filter((t) => isChecked(habits.completions, t.id, checkCredit.date))
-          .map((t) => t.id)
-      ),
-    [checkmarks, habits.completions, checkCredit.date]
-  );
+    // WHICH DAY EACH ITEM CREDITS, decided per item.
+    //
+    // Inside the grace window the strip credits the day that just ended — that is the
+    // whole point, and the case it was built for. But a routine created TODAY was not
+    // due yesterday, so gating the list on the grace date made it vanish entirely: the
+    // strip went empty at exactly the moment someone had just set one up.
+    //
+    // So each item is offered on the grace day if it was due then, and on the real day
+    // otherwise. Anything due on neither is not offered at all.
+    const dueOnGrace = new Set(
+      checkmarksDueOn(habits.templates, graceDate).map((t) => t.id)
+    );
+    const dueOnReal = new Set(
+      checkmarksDueOn(habits.templates, realDate).map((t) => t.id)
+    );
+
+    for (const t of habits.templates) {
+      const onGrace = dueOnGrace.has(t.id);
+      if (!onGrace && !dueOnReal.has(t.id)) continue;
+      const creditDate = onGrace ? graceDate : realDate;
+      items.push({
+        id: `routine:${t.id}`,
+        label: t.label,
+        category: t.category,
+        done: isChecked(habits.completions, t.id, creditDate) ? 1 : 0,
+        perDay: 1,
+        creditDate,
+        creditLabel: formatDayLabel(creditDate),
+        offDay: creditDate !== realDate,
+      });
+    }
+
+    // A goal belongs to a whole week rather than to a day, so it has no due-date gate
+    // and always credits the grace day.
+    const record = loadWeek(toWeekKey(graceDate));
+    for (const g of checkmarkGoals(record)) {
+      items.push({
+        id: `goal:${g.id}`,
+        label: g.label,
+        category: g.category,
+        done: checksForGoal(record.credits, g.id, graceDate),
+        perDay: Math.max(1, Math.ceil(Math.max(1, g.target) / 7)),
+        creditDate: graceDate,
+        creditLabel: formatDayLabel(graceDate),
+        offDay: graceDate !== realDate,
+      });
+    }
+    return items;
+    // `week` and `weekEpoch` are what invalidate the loadWeek call — it reads storage,
+    // which is not reactive, so eslint calls them unnecessary and they are the only
+    // live dependencies of half this list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [habits.templates, habits.completions, checkCredit.date, todayKey, week, weekEpoch]);
 
   /**
    * Tick or untick a checkmark.
@@ -2208,19 +2485,72 @@ export default function App() {
    * check belongs to the day that just ended. The toast states which day it landed on,
    * because a date chosen for you and not stated is indistinguishable from a bug.
    */
+  /**
+   * The current items, readable from a callback without making it depend on them.
+   *
+   * The toggle needs each item's own crediting day, and putting `checkItems` in its
+   * dependency list would rebuild the handler on every tick — which the strip is
+   * memoised against, so every tick would re-render every chip.
+   */
+  const checkItemsRef = useRef<CheckItem[]>([]);
+  useEffect(() => {
+    checkItemsRef.current = checkItems;
+  });
+
   const handleToggleCheck = useCallback(
-    (templateId: string, on: boolean) => {
-      const date = checkDateFor(new Date());
-      setHabits((prev) => ({
-        ...prev,
-        completions: setChecked(prev.completions, templateId, date, on),
-      }));
-      record(on ? 'block.done' : 'block.undone', { date, ref: templateId });
+    (id: string, on: boolean) => {
+      // The item's own crediting day, not a freshly computed one — they can differ,
+      // and recomputing here would credit the wrong day for anything created today.
+      const item = checkItemsRef.current.find((i) => i.id === id);
+      if (!item) return;
+      const date = item.creditDate;
+      const [kind, ref] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)];
+
+      if (kind === 'routine') {
+        setHabits((prev) => ({
+          ...prev,
+          completions: setChecked(prev.completions, ref, date, on),
+        }));
+      } else {
+        // Goal ticks are written straight to the week record. `on` means "add one",
+        // and clearing only happens once the day's quota is already full — see the
+        // note in CheckmarkStrip on why this is not a plain toggle.
+        const key = toWeekKey(date);
+        const target = key === week.week ? week : loadWeek(key);
+        const credits = on
+          ? addGoalCheck(target.credits, ref, date, `check:${ref}:${date}:${uid()}`)
+          : target.credits.filter(
+              (c) => !(c.goalId === ref && c.date === date && c.checked === true)
+            );
+        const next = { ...target, credits };
+        saveWeek(next);
+        if (key === week.week) setWeek(next);
+        setWeekEpoch((n) => n + 1);
+      }
+
+      record(on ? 'block.done' : 'block.undone', { date, ref });
+
+      // The same float a completed block gets, at the size a check is actually worth.
+      // Without it a tick pays silently and reads as paying nothing — and the number
+      // you watch fly up is the one you believe.
+      //
+      // The boost applies here for the same reason it applies there: it is a day-level
+      // multiplier, so a float that ignored it would show +8 and credit +16.
+      if (on) {
+        const mods = modifiersRef.current[date] ?? NO_MODIFIERS;
+        setXpFloat({
+          key: Date.now(),
+          xp: Math.round(CHECK_XP * mods.boost),
+          combo: 0,
+        });
+        if (sfxOn) sfxComplete();
+      }
+
       if (on && date !== todayKey) {
         setToast(`Checked for ${formatDayLabel(date)} — the day that just ended.`);
       }
     },
-    [todayKey]
+    [todayKey, week, sfxOn]
   );
 
   const handleAddTasks = useCallback(
@@ -2700,28 +3030,30 @@ export default function App() {
 
   const handleAddGoal = useCallback(
     (goal: WeeklyGoal) => {
+      recordWeekUndo(goalsWeek, 'adding that goal');
       if (goalsWeek === week.week) {
-        setWeek((prev) => ({ ...prev, goals: [...prev.goals, goal] }));
+        setWeek((prev) => addGoalToWeek(prev, goal));
       } else {
-        const target = loadWeek(goalsWeek);
-        saveWeek({ ...target, goals: [...target.goals, goal] });
+        saveWeek(addGoalToWeek(loadWeek(goalsWeek), goal));
         setGoalsWeek(goalsWeek); // force the memo to re-read
       }
     },
-    [goalsWeek, week.week]
+    [goalsWeek, week.week, recordWeekUndo]
   );
 
   const handleRemoveGoal = useCallback(
     (id: string) => {
+      recordWeekUndo(goalsWeek, 'removing that goal');
       if (goalsWeek === week.week) {
-        setWeek((prev) => ({ ...prev, goals: prev.goals.filter((g) => g.id !== id) }));
+        // `removeGoalFromWeek` leaves a tombstone for a weekly goal. Without it the
+        // prior week still holds the goal and the next rollover puts it straight back.
+        setWeek((prev) => removeGoalFromWeek(prev, id));
       } else {
-        const target = loadWeek(goalsWeek);
-        saveWeek({ ...target, goals: target.goals.filter((g) => g.id !== id) });
+        saveWeek(removeGoalFromWeek(loadWeek(goalsWeek), id));
         setGoalsWeek(goalsWeek);
       }
     },
-    [goalsWeek, week.week]
+    [goalsWeek, week.week, recordWeekUndo]
   );
 
   const handlePullCarryover = useCallback(
@@ -2749,6 +3081,7 @@ export default function App() {
   /** Stand a goal down for the week, or bring it back. */
   const handleSetVoided = useCallback(
     (goalId: string, voided: boolean) => {
+      recordWeekUndo(goalsWeek, voided ? 'standing that down' : 'bringing that back');
       if (goalsWeek === week.week) {
         setWeek((prev) => setVoided(prev, goalId, voided));
       } else {
@@ -2756,53 +3089,60 @@ export default function App() {
         setGoalsWeek(goalsWeek);
       }
     },
-    [goalsWeek, week.week]
+    [goalsWeek, week.week, recordWeekUndo]
   );
 
   // -------------------------------------------------------------------------
   // Routines
   // -------------------------------------------------------------------------
   const handleAddRoutine = useCallback((t: RecurringTask) => {
+    recordHabitsUndo('adding that routine');
     setHabits((prev) => ({ ...prev, templates: [...prev.templates, t] }));
-  }, []);
+  }, [recordHabitsUndo]);
 
   const handleUpdateRoutine = useCallback((id: string, patch: Partial<RecurringTask>) => {
+    recordHabitsUndo('that routine change');
     setHabits((prev) => ({
       ...prev,
       templates: prev.templates.map((t) => (t.id === id ? { ...t, ...patch } : t)),
     }));
-  }, []);
+  }, [recordHabitsUndo]);
 
   const handleRemoveRoutine = useCallback((id: string) => {
+    recordHabitsUndo('deleting that routine');
     setHabits((prev) => ({
       ...prev,
       templates: prev.templates.filter((t) => t.id !== id),
       // Keep the completion history — it belongs to the days it happened on.
       completions: prev.completions,
     }));
-  }, []);
+  }, [recordHabitsUndo]);
 
   // -------------------------------------------------------------------------
   // Categories
   // -------------------------------------------------------------------------
   const handleAddCategory = useCallback((c: CategoryDef) => {
+    recordCategoriesUndo('adding that category');
     setCategories((prev) => [...prev, c]);
-  }, []);
+  }, [recordCategoriesUndo]);
 
   const handleUpdateCategory = useCallback((id: string, patch: Partial<CategoryDef>) => {
+    recordCategoriesUndo('that category change');
     setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }, []);
+  }, [recordCategoriesUndo]);
 
   const handleRemoveCategory = useCallback((id: string) => {
+    recordCategoriesUndo('deleting that category');
     setCategories((prev) => {
       const next = prev.filter((c) => c.id !== id);
       // Never leave the list empty: pickers would be blank and every block would
       // resolve to Uncategorised.
       return next.length > 0 ? next : prev;
     });
-  }, []);
+  }, [recordCategoriesUndo]);
 
   const handleReorderCategory = useCallback((id: string, dir: -1 | 1) => {
+    recordCategoriesUndo('that reorder');
     setCategories((prev) => {
       const sorted = [...prev].sort((a, b) => a.order - b.order);
       const i = sorted.findIndex((c) => c.id === id);
@@ -2811,7 +3151,7 @@ export default function App() {
       [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
       return sorted.map((c, idx) => ({ ...c, order: idx }));
     });
-  }, []);
+  }, [recordCategoriesUndo]);
 
   // -------------------------------------------------------------------------
   // Day marks
@@ -3094,6 +3434,45 @@ export default function App() {
       />
 
       <main className="flex-1 min-w-0 flex flex-col h-full">
+        {/*
+          A day whose record cannot be read.
+          Loud enough to act on, not a modal to dismiss before working. It states that
+          nothing has been recounted, because the fear this raises is "have I lost my
+          score", and the answer is no — the day is frozen, not zeroed.
+        */}
+        {corruptDates.length > 0 && !corruptDismissed && (
+          <div
+            className="flex items-center gap-3 px-4 py-2 border-b flex-wrap"
+            style={{ background: 'var(--bad-soft)', borderColor: 'var(--rule-2)' }}
+          >
+            <TriangleAlert size={14} strokeWidth={2} style={{ color: 'var(--bad)' }} />
+            <span className="text-[12.5px]" style={{ color: 'var(--bone-0)' }}>
+              {corruptDates.length === 1
+                ? `${formatDayLabel(corruptDates[0])} could not be read.`
+                : `${corruptDates.length} days could not be read.`}{' '}
+              <span className="text-ink-3">
+                Their totals are frozen and unchanged — nothing has been recounted.
+              </span>
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={() => {
+                bumpModal();
+                setBackupOpen(true);
+              }}
+              className="btn-quiet text-[12px] font-medium px-2.5 h-7 rounded-md"
+            >
+              Restore from backup
+            </button>
+            <button
+              onClick={() => setCorruptDismissed(true)}
+              aria-label="Dismiss"
+              className="grid place-items-center w-7 h-7 rounded-md text-ink-3 hover:text-ink-0 transition-colors"
+            >
+              <X size={13} strokeWidth={2} />
+            </button>
+          </div>
+        )}
         {nav === 'calendar' && (
           <>
             <Toolbar
@@ -3187,12 +3566,8 @@ export default function App() {
                     must not be drawn as one — a row on the grid would put it back into
                     the schedule visually while claiming it is out of it. */}
                 <CheckmarkStrip
-                  items={checkmarks}
+                  items={checkItems}
                   categories={categories}
-                  checked={checkedToday}
-                  creditDate={checkCredit.date}
-                  creditLabel={checkCredit.label}
-                  inGrace={checkCredit.inGrace}
                   onToggle={handleToggleCheck}
                 />
               <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr_356px] px-6 pb-6 gap-0">
@@ -3222,7 +3597,7 @@ export default function App() {
                     A single vertical rule divides it from the sheet; that rule is
                     the whole reason this doesn't need to be a second card. */}
                 <div className="min-h-0 overflow-y-auto thin-scroll xl:pl-6 xl:ml-6 xl:border-l xl:border-rule-2">
-                  <ProgressWheel blocks={dayPlan.blocks} />
+                  <ProgressWheel blocks={dayPlan.blocks} checks={checksOnDate} />
                   <IntakePanel
                     tasks={dayPlan.tasks}
                     overflow={overflow}
@@ -3264,6 +3639,7 @@ export default function App() {
               onExport={handleExportBriefing}
               onImport={handleImportFindings}
               importError={importError}
+              drift={studyDrift}
             />
           </>
         )}
@@ -3283,6 +3659,7 @@ export default function App() {
               onAddGoal={handleAddGoal}
               onRemoveGoal={handleRemoveGoal}
               onSetVoided={handleSetVoided}
+              onSetCheckmark={handleSetGoalCheckmark}
               onPullCarryover={handlePullCarryover}
               onDropCarryover={handleDropCarryover}
               onResizeCarryover={handleResizeCarryover}

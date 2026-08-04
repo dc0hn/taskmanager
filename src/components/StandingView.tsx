@@ -168,7 +168,7 @@ export default function StandingView({
   );
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll px-6 pb-10">
+    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll pl-8 pr-6 pb-10">
       <motion.div {...panel} className="max-w-[900px]">
         {/* ---------------- the standing itself ---------------- */}
         <div className="py-5">
@@ -746,7 +746,7 @@ function SeasonPanel({
           { label: 'BEST RUN', value: season.bestRun.toLocaleString() },
           { label: 'HOURS DEEP', value: hours(season.focusMinutes) },
         ].map((f) => (
-          <div key={f.label}>
+          <div key={f.label} className="min-w-0">
             <div className="font-mono tnum" style={{ fontSize: 19, color: 'var(--bone-0)' }}>
               {f.value}
             </div>

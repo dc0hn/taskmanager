@@ -338,6 +338,19 @@ mod link_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    // ONE INSTANCE, ALWAYS.
+    //
+    // Two windows share one localStorage with no coordination between them: the last
+    // write to a key wins, the two undo stacks diverge, and both reconcile loops fight
+    // over the same day stats — each recomputing a day the other has just changed. The
+    // second launch focuses the existing window instead.
+    .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+      use tauri::Manager;
+      if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+      }
+    }))
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

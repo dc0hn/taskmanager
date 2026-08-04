@@ -181,8 +181,11 @@ function ShopPanel({
       {KIND_ORDER.map((kind) =>
         grouped[kind].length === 0 ? null : (
           <div key={kind} className="mt-5">
-            <div className="flex items-baseline gap-2 mb-2">
-              <span className="legend">{KIND_LABEL[kind]}</span>
+            {/* Wraps, because the blurb is a sentence and the label beside it is not
+                negotiable — without this the pair sets the row's minimum width and the
+                section overflows on a narrow window. */}
+            <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+              <span className="legend shrink-0">{KIND_LABEL[kind]}</span>
               <span className="font-mono text-nano text-bone-4">{KIND_BLURB[kind]}</span>
             </div>
             <div className="grid gap-1.5 lg:grid-cols-2">
@@ -236,7 +239,7 @@ function Equipped({
           if (owned.length === 0) return null;
           const current = shop.equipped[slot];
           return (
-            <div key={slot} className="flex items-center gap-2 flex-wrap">
+            <div key={slot} className="flex items-center gap-2 flex-wrap min-w-0">
               <span
                 className="font-mono text-nano text-bone-3 shrink-0"
                 style={{ width: 46 }}
@@ -300,7 +303,12 @@ function ShopTile({
 
   return (
     <div
-      className="flex items-start gap-2.5 px-2.5 py-2"
+      // `min-w-0` is load-bearing: a grid item defaults to `min-width: auto`, so it
+      // refuses to shrink below its own content and pushes the whole two-column grid
+      // wider than the page. With `overflow-y-auto` on the scroll container, overflow-x
+      // becomes `auto` too — so the excess does not just spill, it CLIPS, and the left
+      // edge of everything above goes with it.
+      className="flex items-start gap-2.5 px-2.5 py-2 min-w-0"
       style={{
         background: canBuy ? 'var(--chassis-2)' : 'var(--chassis-1)',
         border: `1px solid ${canBuy ? 'var(--rule-3)' : 'var(--rule-1)'}`,
@@ -315,7 +323,7 @@ function ShopTile({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2 flex-wrap">
           <span
-            className="text-body-sm"
+            className="text-body-sm min-w-0 truncate"
             style={{ color: 'var(--bone-0)', fontWeight: 600 }}
           >
             {item.name}

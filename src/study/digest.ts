@@ -253,3 +253,63 @@ export function pruneDigests(
     return age >= 0 && age < retentionDays;
   });
 }
+
+
+// ---------------------------------------------------------------------------
+// Self-check
+// ---------------------------------------------------------------------------
+
+export interface DigestDrift {
+  date: string;
+  field: keyof DayDigest;
+  sealed: number | null;
+  recomputed: number | null;
+}
+
+/**
+ * Re-derive sealed digests from the surviving plans and report where they disagree.
+ *
+ * A digest is sealed once and never recomputed, which is what makes the study's history
+ * stable — and also what makes drift invisible: if the measuring changes, every past row
+ * keeps the old answer with nothing to say so. This is the counterweight. It NEVER
+ * writes; the sealed value always wins, and a disagreement is a finding about the code
+ * rather than a record to correct.
+ *
+ * Only fields derivable from a plan are compared. The motion counts came from raw
+ * events that have since been discarded by design, so comparing them would report a
+ * difference on every row and drown the real signal.
+ */
+const CHECKED_FIELDS: (keyof DayDigest)[] = [
+  'blocksPlanned',
+  'blocksDone',
+  'longestBlock',
+  'deepMinutes',
+  'contexts',
+];
+
+export function selfCheck(
+  digests: DayDigest[],
+  blocksFor: (date: string) => Block[],
+  focusOf: (categoryId: string) => boolean,
+  sample = 30
+): DigestDrift[] {
+  const out: DigestDrift[] = [];
+  // Most recent first: drift starts at the edit and works backwards, so the newest
+  // rows are where it shows up first.
+  const recent = [...digests].sort((a, b) => b.date.localeCompare(a.date)).slice(0, sample);
+
+  for (const sealed of recent) {
+    const blocks = blocksFor(sealed.date);
+    // A day whose plan has gone cannot be re-derived, and reporting it as drifted
+    // would blame the code for a record that is simply no longer there.
+    if (blocks.length === 0 && sealed.blocksPlanned > 0) continue;
+
+    const fresh = buildDigest(sealed.date, blocks, [], undefined, focusOf);
+    for (const field of CHECKED_FIELDS) {
+      const a = sealed[field] as number;
+      const b = fresh[field] as number;
+      if (a !== b) out.push({ date: sealed.date, field, sealed: a, recomputed: b });
+    }
+  }
+  return out;
+}

@@ -57,6 +57,8 @@ interface Props {
   onExport: () => void;
   onImport: (text: string) => void;
   importError: string;
+  /** Sealed rows that no longer match a re-derivation. Empty is the healthy case. */
+  drift: { date: string; field: string; sealed: number | null; recomputed: number | null }[];
 }
 
 function StudyView({
@@ -69,6 +71,7 @@ function StudyView({
   onExport,
   onImport,
   importError,
+  drift,
 }: Props) {
   const [tab, setTab] = useState<Tab>('observe');
 
@@ -85,7 +88,7 @@ function StudyView({
   const answered = answeredCount(profile);
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll px-6 pb-8">
+    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll pl-8 pr-6 pb-8">
       <div className="max-w-[1100px]">
         <div className="flex items-center gap-2 py-4 flex-wrap">
           {(
@@ -131,7 +134,7 @@ function StudyView({
         {tab === 'findings' && (
           <Findings checks={checks} onImport={onImport} error={importError} />
         )}
-        {tab === 'limits' && <Limits />}
+        {tab === 'limits' && <Limits drift={drift} />}
       </div>
     </div>
   );
@@ -572,9 +575,49 @@ function Findings({
 
 // ---------------------------------------------------------------------------
 
-function Limits() {
+function Limits({
+  drift,
+}: {
+  drift: { date: string; field: string; sealed: number | null; recomputed: number | null }[];
+}) {
   return (
     <div>
+      {/* The self-check. A sealed digest is never recomputed, which keeps history
+          stable and also makes drift invisible — if the measuring changes, every past
+          row keeps the old answer with nothing to say so. This is the counterweight,
+          and it never writes: the sealed value always wins. */}
+      <div
+        className="px-3.5 py-3 mb-5 rounded"
+        style={{
+          background: drift.length ? 'var(--bad-soft)' : 'var(--chassis-1)',
+          border: `1px solid ${drift.length ? 'var(--bad)' : 'var(--rule-2)'}`,
+        }}
+      >
+        <div className="legend mb-1">Self-check</div>
+        {drift.length === 0 ? (
+          <p className="text-[12px] text-ink-3 leading-snug max-w-[62ch]">
+            Sealed days still match a fresh re-derivation. If the way a day is measured
+            ever changes, the difference appears here rather than silently rewriting the
+            record.
+          </p>
+        ) : (
+          <>
+            <p className="text-[12px] leading-snug max-w-[62ch]" style={{ color: 'var(--bone-0)' }}>
+              {drift.length} sealed {drift.length === 1 ? 'figure' : 'figures'} no longer
+              match a re-derivation. The sealed values stand — this is a finding about
+              the code, not a record to correct.
+            </p>
+            <ul className="mt-2 flex flex-col gap-0.5">
+              {drift.slice(0, 8).map((d, i) => (
+                <li key={i} className="font-mono text-nano text-bone-3 tnum">
+                  {d.date} · {d.field}: sealed {d.sealed}, now {d.recomputed}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+
       <p className="text-[12.5px] text-ink-3 leading-relaxed max-w-[64ch] mb-5">
         This study observes the calendar, not the life. Time not scheduled is not time
         not worked, and nothing below is a gap that careful reading can close — each one

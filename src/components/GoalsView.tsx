@@ -5,6 +5,8 @@ import {
   ArrowRight,
   Check,
   CircleSlash,
+  CheckSquare,
+  Clock3,
   CornerDownLeft,
   Plus,
   Scissors,
@@ -27,6 +29,7 @@ import type { WeekReview } from '../goals';
 import {
   carryoverByCategory,
   STALE_DEFERRAL_THRESHOLD,
+  checkmarkable,
   staleCarryover,
   weekProgress,
 } from '../goals';
@@ -63,6 +66,7 @@ interface Props {
   onAddGoal: (goal: WeeklyGoal) => void;
   onRemoveGoal: (id: string) => void;
   onSetVoided: (goalId: string, voided: boolean) => void;
+  onSetCheckmark: (goalId: string, checkmark: boolean) => void;
   onPullCarryover: (goalId: string) => void;
   onDropCarryover: (goalId: string) => void;
   onResizeCarryover: (goalId: string, residual: number) => void;
@@ -80,6 +84,7 @@ export default function GoalsView({
   onAddGoal,
   onRemoveGoal,
   onSetVoided,
+  onSetCheckmark,
   onPullCarryover,
   onDropCarryover,
   onResizeCarryover,
@@ -94,7 +99,7 @@ export default function GoalsView({
   const isCurrent = weekKey === currentWeekKey();
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll px-6 pb-8">
+    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll pl-8 pr-6 pb-8">
       <div className="max-w-[1100px]">
         {/* ------------- week nav ------------- */}
         <div className="flex items-center gap-2 py-4 flex-wrap">
@@ -276,6 +281,43 @@ export default function GoalsView({
                         </div>
                       </div>
                       <div className="flex items-center gap-0.5 shrink-0">
+                        {/* Checkmark or scheduled. Always visible rather than revealed
+                            on hover, because it changes whether the goal reaches the
+                            scheduler at all — too large a consequence to hide. Offered
+                            only where it can actually work: a minutes target cannot be
+                            satisfied by a tick, which carries no minutes. */}
+                        {isCurrent && checkmarkable(p.goal) && (
+                          <button
+                            onClick={() =>
+                              onSetCheckmark(p.goal.id, p.goal.checkmark !== true)
+                            }
+                            aria-pressed={p.goal.checkmark === true}
+                            title={
+                              p.goal.checkmark
+                                ? 'A checkmark — ticked from the day at any hour, never scheduled. Click to put it back on the grid.'
+                                : 'Scheduled work. Click to make it a checkmark you tick off instead.'
+                            }
+                            className="inline-flex items-center gap-1 px-1.5 h-6 rounded-md text-[10px] font-medium transition-all"
+                            style={{
+                              background: p.goal.checkmark
+                                ? 'var(--signal-dim)'
+                                : 'transparent',
+                              border: `1px solid ${
+                                p.goal.checkmark ? 'var(--signal-line)' : 'var(--rule-2)'
+                              }`,
+                              color: p.goal.checkmark
+                                ? 'var(--signal)'
+                                : 'var(--bone-3)',
+                            }}
+                          >
+                            {p.goal.checkmark ? (
+                              <CheckSquare size={10} strokeWidth={2.2} />
+                            ) : (
+                              <Clock3 size={10} strokeWidth={2} />
+                            )}
+                            {p.goal.checkmark ? 'Checkmark' : 'Scheduled'}
+                          </button>
+                        )}
                         <button
                           onClick={() => onSetVoided(p.goal.id, p.outcome !== 'void')}
                           aria-label={

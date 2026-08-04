@@ -9,8 +9,7 @@ import type {
   StreakState,
   UserProgress,
 } from './types';
-import { UNKNOWN_CATEGORY } from './types';
-import { scorable, standingFor } from './progress';
+import { kindOf, scorable, standingFor } from './progress';
 import { STREAK_THRESHOLD, daysBetween, shiftDay, todayQualifies } from './streaks';
 import { weekdayOf } from './week';
 
@@ -444,9 +443,7 @@ export function badgeIdFromKey(key: string): string {
 // Building the context
 // ---------------------------------------------------------------------------
 
-function kindOf(categoryId: string, categories: CategoryDef[]): string {
-  return (categories.find((c) => c.id === categoryId) ?? UNKNOWN_CATEGORY).kind;
-}
+
 
 /**
  * Consecutive weekdays meeting the threshold, counting back from yesterday.

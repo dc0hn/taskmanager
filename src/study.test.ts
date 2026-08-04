@@ -14,6 +14,7 @@ import {
   digestFinishedDays,
   emptyDigest,
   pruneDigests,
+  selfCheck,
   type DayDigest,
 } from './study/digest';
 import { battery, byWeekday } from './study/metrics';
@@ -636,5 +637,56 @@ describe('the stated limits', () => {
 
   it('admits the study is watching a watched subject', () => {
     expect(LIMITS.find((l) => l.id === 'hawthorne')).toBeDefined();
+  });
+});
+
+describe('the digest self-check', () => {
+  const blocks = (n: number): Block[] =>
+    Array.from({ length: n }, (_, i) =>
+      block({ id: `b${i}`, start: 540 + i * 60, end: 600 + i * 60 })
+    );
+
+  it('is silent when a sealed row still matches', () => {
+    const sealed = buildDigest('2026-08-01', blocks(3), [], undefined, focus);
+    expect(selfCheck([sealed], () => blocks(3), focus)).toEqual([]);
+  });
+
+  it('names the field when a re-derivation disagrees', () => {
+    const sealed = { ...buildDigest('2026-08-01', blocks(3), [], undefined, focus) };
+    sealed.blocksPlanned = 99;
+    const drift = selfCheck([sealed], () => blocks(3), focus);
+    expect(drift).toHaveLength(1);
+    expect(drift[0]).toMatchObject({ field: 'blocksPlanned', sealed: 99, recomputed: 3 });
+  });
+
+  it('NEVER rewrites the sealed row', () => {
+    // The sealed value is settled history. A self-check that corrected it would be the
+    // very drift it exists to detect.
+    const sealed = { ...buildDigest('2026-08-01', blocks(3), [], undefined, focus) };
+    sealed.blocksPlanned = 99;
+    selfCheck([sealed], () => blocks(3), focus);
+    expect(sealed.blocksPlanned).toBe(99);
+  });
+
+  it('skips a day whose plan is gone rather than blaming the code', () => {
+    const sealed = buildDigest('2026-08-01', blocks(3), [], undefined, focus);
+    expect(selfCheck([sealed], () => [], focus)).toEqual([]);
+  });
+
+  it('does not compare motion counts, which the raw events no longer support', () => {
+    const sealed = { ...buildDigest('2026-08-01', blocks(1), [], undefined, focus) };
+    sealed.opens = 11;
+    sealed.moves = 4;
+    expect(selfCheck([sealed], () => blocks(1), focus)).toEqual([]);
+  });
+
+  it('samples the most recent days first', () => {
+    const days = Array.from({ length: 40 }, (_, i) =>
+      buildDigest(`2026-08-${String(i + 1).padStart(2, '0')}`, blocks(1), [], undefined, focus)
+    );
+    const drift = selfCheck(days, () => blocks(2), focus, 5);
+    const dates = [...new Set(drift.map((d) => d.date))];
+    expect(dates).toHaveLength(5);
+    expect(dates).toContain('2026-08-40');
   });
 });

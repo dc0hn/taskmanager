@@ -9,10 +9,11 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { exportAll, importAll } from '../storage';
+import { exportAll, importAll, storeUsage } from '../storage';
 import {
   backendAvailable,
   loadSnapshotRecord,
+  verifySnapshot,
   restoreFromSnapshot,
   takeSnapshot,
   type SnapshotRecord,
@@ -266,7 +267,10 @@ function SnapshotRow({
   onNotify: (message: string) => void;
 }) {
   const [record, setRecord] = useState<SnapshotRecord>(() => loadSnapshotRecord());
-  const [busy, setBusy] = useState<'write' | 'restore' | null>(null);
+  const [busy, setBusy] = useState<'write' | 'restore' | 'verify' | null>(null);
+  // Measured once when the panel opens. It walks every key, so it must never be on a
+  // render path — this component only mounts when the modal is shown.
+  const [usage] = useState(() => storeUsage());
   const [confirming, setConfirming] = useState(false);
 
   if (!backendAvailable()) {
@@ -288,6 +292,13 @@ function SnapshotRow({
     onNotify(outcome.message);
   }
 
+  async function doVerify() {
+    setBusy('verify');
+    const outcome = await verifySnapshot(false);
+    setBusy(null);
+    onNotify(outcome.message);
+  }
+
   async function doRestore(previous: boolean) {
     setBusy('restore');
     setConfirming(false);
@@ -302,6 +313,29 @@ function SnapshotRow({
         <div className="min-w-0">
           <div className="font-mono text-[10.5px] text-bone-2 tracking-wide">
             AUTOMATIC SNAPSHOT
+          </div>
+          {/* The store's own size, measured on open.
+              Day plans are never pruned — they are the record of what you actually
+              did — so this is the only thing that makes their growth visible before
+              the quota is reached rather than after. */}
+          <div className="font-mono text-[10.5px] text-bone-3 mt-0.5">
+            Store {(usage.bytes / 1024).toFixed(1)} KB of ~5 MB · {usage.keys} records
+            {usage.bytes > QUOTA_WARN_BYTES && (
+              <span style={{ color: 'var(--warn)' }}> · export a backup</span>
+            )}
+          </div>
+          <div
+            className="h-[3px] rounded-full overflow-hidden mt-1"
+            style={{ background: 'var(--chassis-4)', maxWidth: 220 }}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${Math.min(100, (usage.bytes / QUOTA_BYTES) * 100)}%`,
+                background:
+                  usage.bytes > QUOTA_WARN_BYTES ? 'var(--warn)' : 'var(--signal)',
+              }}
+            />
           </div>
           <div className="font-mono text-[10.5px] text-bone-3 mt-0.5">
             {record.lastOn
@@ -362,6 +396,14 @@ function SnapshotRow({
           </div>
           <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
             <button
+              onClick={() => void doVerify()}
+              disabled={busy !== null}
+              className="btn-quiet font-mono text-[10.5px] px-2.5 h-7 rounded"
+              title="Read the snapshot back and confirm it could actually be restored from."
+            >
+              {busy === 'verify' ? 'Checking…' : 'Verify'}
+            </button>
+            <button
               onClick={() => void doRestore(false)}
               className="btn-primary text-[12px] px-3 py-1.5 rounded-lg"
             >
@@ -388,6 +430,10 @@ function SnapshotRow({
 }
 
 /** Small nav-rail affordance that opens the modal. */
+/** WebKit's default localStorage quota, and where to start warning. */
+const QUOTA_BYTES = 5 * 1024 * 1024;
+const QUOTA_WARN_BYTES = QUOTA_BYTES * 0.7;
+
 export function BackupButton({ onClick }: { onClick: () => void }) {
   return (
     <button

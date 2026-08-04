@@ -147,7 +147,7 @@ function LadderTile({ ladder }: { ladder: LadderStatus }) {
 
   return (
     <div
-      className="flex items-start gap-2.5 px-2.5 py-2"
+      className="flex items-start gap-2.5 px-2.5 py-2 min-w-0"
       style={{
         background: earned > 0 ? 'var(--chassis-2)' : 'var(--chassis-1)',
         border: `1px solid ${earned > 0 ? 'var(--signal-line)' : 'var(--rule-1)'}`,
@@ -229,7 +229,7 @@ function BadgeTile({ status }: { status: BadgeStatus }) {
 
   return (
     <div
-      className="flex items-start gap-2.5 px-2.5 py-2"
+      className="flex items-start gap-2.5 px-2.5 py-2 min-w-0"
       style={{
         background: earned ? 'var(--chassis-2)' : 'var(--chassis-1)',
         border: `1px solid ${earned ? 'var(--signal-line)' : 'var(--rule-1)'}`,

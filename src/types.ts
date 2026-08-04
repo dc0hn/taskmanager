@@ -272,6 +272,22 @@ export interface WeeklyGoal {
    */
   voided?: boolean;
   /**
+   * Tick this off rather than scheduling it.
+   *
+   * Some goals are counted, not timed. A gallon of water, fourteen walks, a language
+   * lesson — you want the tally, and putting each one on the grid at a made-up hour
+   * makes the calendar say something false, then marks it late when you finish after
+   * the shutdown, or leaves it uncredited because the block it needed was never built.
+   *
+   * A checkmark goal is never offered to the scheduler and never appears as an intake
+   * chip. It is ticked from the Anytime strip on the day, at any hour, as many times a
+   * day as the target implies.
+   *
+   * Only meaningful for `targetKind: 'sessions'`. A minutes target cannot be satisfied
+   * by a tick, because a tick carries no minutes — see `checkmarkable`.
+   */
+  checkmark?: boolean;
+  /**
    * Which way the target points. 'atLeast' is the historical behaviour and the default.
    *
    * A ceiling is the only way to say "protect my focus time", and it is something a
@@ -301,6 +317,17 @@ export interface GoalCredit {
   blockId: string;
   date: string; // YYYY-MM-DD
   minutes: number;
+  /**
+   * Ticked directly rather than earned by completing a scheduled block.
+   *
+   * LOAD-BEARING, for two separate reasons. `reconcileCredits` rebuilds a day's
+   * credits from its blocks and drops everything else for that date, so without this
+   * every tick would be erased by the next edit to the day. And `goalProgress` counts
+   * block sessions by DISTINCT DATE — correct when the scheduler has split one sitting
+   * into three chunks, wrong for something deliberately done twice in a day — so
+   * checked credits are counted individually instead.
+   */
+  checked?: boolean;
 }
 
 export interface WeekRecord {
@@ -329,6 +356,19 @@ export interface WeekRecord {
     weekly: string;
     wildcards: string[];
   };
+  /**
+   * Weekly goals deliberately REMOVED from this week, by id.
+   *
+   * `issueRecurringGoals` copies standing goals forward from the most recent prior
+   * week, which means deleting one only removed it until the next launch — the prior
+   * week still held it, so it was faithfully reissued and came back. Absence could not
+   * distinguish "not yet issued" from "taken off on purpose".
+   *
+   * A tombstone, carried forward each week for as long as the goal could still be
+   * reissued from the week behind it, and dropped once it could not. Adding the goal
+   * back clears it.
+   */
+  dismissed?: string[];
   /**
    * How the week finished, written once at rollover. Absent on weeks predating this
    * and on the week in progress.

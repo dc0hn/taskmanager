@@ -56,7 +56,7 @@ export default function CategoriesView({
   const sorted = [...categories].sort((a, b) => a.order - b.order);
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll px-6 pb-8">
+    <div className="flex-1 min-h-0 overflow-y-auto thin-scroll pl-8 pr-6 pb-8">
       <div className="max-w-[860px]">
         <div className="flex items-center gap-2 py-4">
           <div>

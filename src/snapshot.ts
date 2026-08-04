@@ -155,6 +155,56 @@ export async function snapshotIfDue(today: string): Promise<SnapshotOutcome | nu
   return takeSnapshot(today);
 }
 
+export interface VerifyOutcome {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Read the snapshot back and check it is a restorable document.
+ *
+ * A backup nobody has ever read is a backup in name — the file can be present,
+ * correctly named, and empty or truncated, and you find out at the moment you least
+ * want to. This reads it, parses it, checks the format marker and counts the records,
+ * and touches nothing: it is the one operation here with no side effects at all.
+ */
+export async function verifySnapshot(previous = false): Promise<VerifyOutcome> {
+  if (!backendAvailable()) {
+    return { ok: false, message: 'Snapshots need the desktop app.' };
+  }
+  const which = previous ? 'the previous snapshot' : 'the snapshot';
+  let text: string;
+  try {
+    text = await invokeRead(previous);
+  } catch (e) {
+    return { ok: false, message: `Could not read ${which}: ${String(e)}` };
+  }
+
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return {
+      ok: false,
+      message: `${which} is present but not readable JSON — it cannot be restored from.`,
+    };
+  }
+
+  const d = doc as Record<string, unknown> | null;
+  const records = d && typeof d.records === 'object' && d.records !== null
+    ? Object.keys(d.records as Record<string, unknown>).length
+    : 0;
+  if (!d || typeof d.version !== 'number' || records === 0) {
+    return { ok: false, message: `${which} is not a valid Almanac export.` };
+  }
+
+  const kb = (text.length / 1024).toFixed(1);
+  return {
+    ok: true,
+    message: `${which} is readable — ${records} records, ${kb} KB. Restorable.`,
+  };
+}
+
 export interface RestoreOutcome {
   ok: boolean;
   message: string;

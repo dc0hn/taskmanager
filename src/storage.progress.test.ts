@@ -12,6 +12,12 @@ import {
   saveStreak,
   loadWeek,
   loadShop,
+  isPlanReadable,
+  corruptPlanDates,
+  setWriteFailureHandler,
+  pruneDerivedRecords,
+  pruneFoldState,
+  storeUsage,
 } from './storage';
 import { emptyAwards, emptyStreak } from './streaks';
 import { brassEarned, emptyProgress, reckonDay, wasOnTime } from './progress';
@@ -718,6 +724,221 @@ describe('the active set round trip', () => {
     for (const bad of ['quest-extra', 7, {}, null]) {
       storeShop({ owned: ['quest-extra'], active: bad });
       expect(loadShop('2026-07-30').active).toEqual([]);
+    }
+  });
+});
+
+describe('goal tick round trip', () => {
+  const store = (credit: unknown) =>
+    localStorage.setItem(
+      'dp:week:2026-08-03',
+      JSON.stringify({ week: '2026-08-03', goals: [], credits: [credit] })
+    );
+
+  it('keeps a tick, which carries no minutes', () => {
+    // The trap that would have made this work until the first reload: the old guard
+    // rejected minutes <= 0 outright.
+    store({ goalId: 'walk', blockId: 'c1', date: '2026-08-04', minutes: 0, checked: true });
+    expect(loadWeek('2026-08-03').credits).toEqual([
+      { goalId: 'walk', blockId: 'c1', date: '2026-08-04', minutes: 0, checked: true },
+    ]);
+  });
+
+  it('still refuses a block credit with no minutes', () => {
+    store({ goalId: 'walk', blockId: 'b1', date: '2026-08-04', minutes: 0 });
+    expect(loadWeek('2026-08-03').credits).toEqual([]);
+  });
+
+  it('keeps the checkmark flag on the goal', () => {
+    localStorage.setItem(
+      'dp:week:2026-08-03',
+      JSON.stringify({
+        week: '2026-08-03',
+        credits: [],
+        goals: [{
+          id: 'walk', label: 'Walk', category: 'break', targetKind: 'sessions',
+          target: 14, sessionMinutes: 30, cadence: 'weekly', active: true,
+          deferrals: 0, originWeek: '2026-08-03', checkmark: true,
+        }],
+      })
+    );
+    expect(loadWeek('2026-08-03').goals[0].checkmark).toBe(true);
+  });
+
+  it('reads anything but true as absent, never as false', () => {
+    for (const v of [false, 'yes', 1, null]) {
+      localStorage.setItem(
+        'dp:week:2026-08-03',
+        JSON.stringify({
+          week: '2026-08-03',
+          credits: [],
+          goals: [{
+            id: 'walk', label: 'Walk', category: 'break', targetKind: 'sessions',
+            target: 14, sessionMinutes: 30, cadence: 'weekly', active: true,
+            deferrals: 0, originWeek: '2026-08-03', checkmark: v,
+          }],
+        })
+      );
+      expect(loadWeek('2026-08-03').goals[0].checkmark).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A1/A2/A3 — the audit's storage findings
+// ---------------------------------------------------------------------------
+
+describe('a plan record that cannot be read', () => {
+  const DAY2 = '2026-07-31';
+
+  it('is reported as unreadable rather than as an empty day', () => {
+    // The defect this closes: `read` collapsed absent and corrupt into null, so a
+    // corrupt plan became an empty day, reconciled to zero, and its XP was DEDUCTED
+    // from the lifetime total. Silently, and permanently.
+    localStorage.setItem(`dp:plan:${DAY2}`, '{"blocks":[{"id":"a",');
+    expect(isPlanReadable(DAY2)).toBe(false);
+    expect(corruptPlanDates()).toContain(DAY2);
+  });
+
+  it('treats an absent record as readable, because absence is not corruption', () => {
+    expect(isPlanReadable('2099-01-01')).toBe(true);
+    expect(corruptPlanDates()).not.toContain('2099-01-01');
+  });
+
+  it('treats a well-formed record as readable', () => {
+    localStorage.setItem(
+      `dp:plan:${DAY2}`,
+      JSON.stringify({ date: DAY2, tasks: [], blocks: [] })
+    );
+    expect(isPlanReadable(DAY2)).toBe(true);
+  });
+
+  it('still returns an empty plan, so no caller has to handle a new shape', () => {
+    localStorage.setItem(`dp:plan:${DAY2}`, 'not json at all');
+    expect(loadPlan(DAY2)).toEqual({ date: DAY2, tasks: [], blocks: [] });
+  });
+});
+
+describe('write failures are reported', () => {
+  it('calls the handler rather than only logging', () => {
+    // Release builds register no log sink, so console.error went nowhere a user would
+    // ever look — a full quota looked exactly like a successful save.
+    const seen: string[] = [];
+    setWriteFailureHandler((key) => seen.push(key));
+
+    const original = localStorage.setItem;
+    localStorage.setItem = () => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    };
+    try {
+      savePlan({ date: '2026-08-04', tasks: [], blocks: [] });
+    } finally {
+      localStorage.setItem = original;
+      setWriteFailureHandler(null);
+    }
+    expect(seen).toEqual(['dp:plan:2026-08-04']);
+  });
+
+  it('survives a handler that throws, rather than becoming the failure it reports', () => {
+    setWriteFailureHandler(() => {
+      throw new Error('reporter exploded');
+    });
+    const original = localStorage.setItem;
+    localStorage.setItem = () => {
+      throw new Error('nope');
+    };
+    try {
+      expect(() => savePlan({ date: '2026-08-04', tasks: [], blocks: [] })).not.toThrow();
+    } finally {
+      localStorage.setItem = original;
+      setWriteFailureHandler(null);
+    }
+  });
+});
+
+describe('pruning derived records', () => {
+  it('drops sealed months past the horizon and keeps recent ones', () => {
+    localStorage.setItem('dp:month:2015-01', JSON.stringify({ month: '2015-01' }));
+    localStorage.setItem('dp:month:2026-07', JSON.stringify({ month: '2026-07' }));
+    const removed = pruneDerivedRecords('2026-08-04');
+    expect(removed).toContain('dp:month:2015-01');
+    expect(removed).not.toContain('dp:month:2026-07');
+    expect(localStorage.getItem('dp:month:2026-07')).not.toBeNull();
+  });
+
+  it('NEVER touches a day plan, however old', () => {
+    // Plans are the primary record of what you actually did. Nothing prunes them.
+    localStorage.setItem('dp:plan:2010-01-01', JSON.stringify({ date: '2010-01-01' }));
+    pruneDerivedRecords('2026-08-04');
+    expect(localStorage.getItem('dp:plan:2010-01-01')).not.toBeNull();
+  });
+
+  it('never touches a week record either', () => {
+    localStorage.setItem('dp:week:2010-01-04', JSON.stringify({ week: '2010-01-04' }));
+    pruneDerivedRecords('2026-08-04');
+    expect(localStorage.getItem('dp:week:2010-01-04')).not.toBeNull();
+  });
+
+  it('is idempotent', () => {
+    localStorage.setItem('dp:month:2015-01', JSON.stringify({ month: '2015-01' }));
+    expect(pruneDerivedRecords('2026-08-04').length).toBeGreaterThan(0);
+    expect(pruneDerivedRecords('2026-08-04')).toEqual([]);
+  });
+});
+
+describe('fold-state sweep', () => {
+  it('drops keys for panels that no longer exist', () => {
+    localStorage.setItem('dp:fold:gone', '1');
+    localStorage.setItem('dp:fold:alive', '1');
+    expect(pruneFoldState(['alive'])).toBe(1);
+    expect(localStorage.getItem('dp:fold:gone')).toBeNull();
+    expect(localStorage.getItem('dp:fold:alive')).not.toBeNull();
+  });
+});
+
+describe('store usage', () => {
+  it('reports a size that grows with what is stored', () => {
+    const before = storeUsage();
+    localStorage.setItem('dp:plan:2026-09-09', 'x'.repeat(2000));
+    const after = storeUsage();
+    expect(after.bytes).toBeGreaterThan(before.bytes);
+    expect(after.keys).toBeGreaterThan(before.keys);
+  });
+});
+
+describe('the dismissed list round trip', () => {
+  const store = (dismissed: unknown) =>
+    localStorage.setItem(
+      'dp:week:2026-08-03',
+      JSON.stringify({ week: '2026-08-03', goals: [], credits: [], dismissed })
+    );
+
+  it('keeps a tombstone, so a deleted goal stays deleted across a reload', () => {
+    store(['walk', 'pushups']);
+    expect(loadWeek('2026-08-03').dismissed).toEqual(['walk', 'pushups']);
+  });
+
+  it('deduplicates on read', () => {
+    store(['walk', 'walk']);
+    expect(loadWeek('2026-08-03').dismissed).toEqual(['walk']);
+  });
+
+  it('is absent rather than empty when there is nothing to remember', () => {
+    store([]);
+    expect(loadWeek('2026-08-03').dismissed).toBeUndefined();
+    store(undefined);
+    expect(loadWeek('2026-08-03').dismissed).toBeUndefined();
+  });
+
+  it('drops entries that are not usable ids', () => {
+    store(['walk', '', 7, null, {}]);
+    expect(loadWeek('2026-08-03').dismissed).toEqual(['walk']);
+  });
+
+  it('ignores a field that is not a list', () => {
+    for (const bad of ['walk', 7, {}]) {
+      store(bad);
+      expect(loadWeek('2026-08-03').dismissed).toBeUndefined();
     }
   });
 });

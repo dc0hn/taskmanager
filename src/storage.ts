@@ -46,7 +46,7 @@ import {
 import type { Commission } from './commissions';
 import { isSeasonKey, seasonRange, type SeasonRecord } from './seasons';
 import { characterById } from './characters';
-import { toDateKey } from './utils/time';
+import { addDays as addDaysKey, toDateKey } from './utils/time';
 import { decodeEvent, encodeEvent, type StudyEvent } from './study/ledger';
 import type { DayDigest } from './study/digest';
 import {
@@ -89,6 +89,7 @@ const COMMISSIONS_KEY = 'dp:commissions:v1';
 const SEASON_PREFIX = 'dp:season:';
 const MARK_DEFS_KEY = 'dp:markdefs:v1';
 const DAY_MARKS_KEY = 'dp:daymarks:v1';
+const FOLD_PREFIX = 'dp:fold:';
 const STUDY_EVENTS_KEY = 'dp:study:events:v1';
 const STUDY_DIGESTS_KEY = 'dp:study:digests:v1';
 const STUDY_PROFILE_KEY = 'dp:study:profile:v1';
@@ -139,14 +140,62 @@ const toCategoryId = (v: unknown): Category => {
   return s.length > 0 ? s : 'other';
 };
 
-function read<T>(key: string): T | null {
+/**
+ * A read that distinguishes ABSENT from CORRUPT.
+ *
+ * `read` below collapses the two into `null`, and every caller then treats "no data"
+ * as "nothing happened". For a day plan that is a silent, permanent loss: the key
+ * still exists, so `listPlanDates` counts the date as authoritative, `loadPlan`
+ * returns an empty day, and reconciliation applies a NEGATIVE delta that removes that
+ * day's XP from the lifetime total. The calendar loses the blocks and the score loses
+ * the day, with nothing surfaced.
+ *
+ * Absence and corruption are different facts and callers that care must be able to
+ * ask. See `isPlanReadable`.
+ */
+export type ReadResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: 'absent' | 'corrupt' };
+
+function readStrict<T>(key: string): ReadResult<T> {
+  let raw: string | null;
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
+    raw = localStorage.getItem(key);
   } catch {
-    return null;
+    // Storage itself unavailable — indistinguishable from absent to every caller,
+    // and nothing here can repair it.
+    return { ok: false, reason: 'absent' };
   }
+  if (raw == null || raw === '') return { ok: false, reason: 'absent' };
+  try {
+    return { ok: true, value: JSON.parse(raw) as T };
+  } catch {
+    return { ok: false, reason: 'corrupt' };
+  }
+}
+
+function read<T>(key: string): T | null {
+  const r = readStrict<T>(key);
+  return r.ok ? r.value : null;
+}
+
+/**
+ * Reported when a write fails, so a failure is never only a console line.
+ *
+ * Release builds register no log sink — `tauri-plugin-log` is debug-only — so
+ * `console.error` went nowhere a user would ever look. A quota exhaustion, a locked
+ * store or a full disk therefore looked exactly like a successful save until the app
+ * was closed and the work turned out not to be there.
+ *
+ * A callback rather than a throw: these run inside render effects and setState
+ * callbacks, where an exception would abandon the user's action half-done.
+ */
+let onWriteFailure: ((key: string, error: unknown) => void) | null = null;
+
+export function setWriteFailureHandler(
+  handler: ((key: string, error: unknown) => void) | null
+): void {
+  onWriteFailure = handler;
 }
 
 function write(key: string, value: unknown): void {
@@ -154,7 +203,34 @@ function write(key: string, value: unknown): void {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
     console.error(`Almanac: write failed for ${key}`, e);
+    try {
+      onWriteFailure?.(key, e);
+    } catch {
+      // A reporter that throws must not become the failure it is reporting.
+    }
   }
+}
+
+/**
+ * Roughly how much of the store is in use, in bytes.
+ *
+ * UTF-16, because that is what WebKit charges for. Approximate by design — it walks
+ * every key, so it is called by the backup panel on open rather than on a render path.
+ */
+export function storeUsage(): { bytes: number; keys: number } {
+  let bytes = 0;
+  let keys = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      keys++;
+      bytes += (key.length + (localStorage.getItem(key)?.length ?? 0)) * 2;
+    }
+  } catch (e) {
+    console.error('Almanac: could not measure the store', e);
+  }
+  return { bytes, keys };
 }
 
 /**
@@ -249,6 +325,24 @@ function normalizeBlock(r: unknown): Block | null {
     notes: normalizeNotes(b.notes),
     keepWhole: b.keepWhole === true ? true : undefined,
   };
+}
+
+/**
+ * Whether a stored plan can actually be read.
+ *
+ * The guard that stops a corrupt record being scored as an empty day. A date that is
+ * unreadable is EXCLUDED from reconciliation rather than counted as zero — the same
+ * reasoning `withinRetention` already embodies: a day we cannot measure must be left
+ * alone, not measured as nothing.
+ */
+export function isPlanReadable(date: string): boolean {
+  const r = readStrict(PLAN_PREFIX + date);
+  return r.ok || r.reason !== 'corrupt';
+}
+
+/** Every stored date whose record cannot be parsed. Empty is the normal case. */
+export function corruptPlanDates(): string[] {
+  return listPlanDates().filter((d) => !isPlanReadable(d));
 }
 
 export function loadPlan(date: string): DayPlan {
@@ -440,6 +534,8 @@ function normalizeGoal(r: unknown): WeeklyGoal | null {
     deferrals: isFiniteNum(g.deferrals) && g.deferrals >= 0 ? Math.round(g.deferrals) : 0,
     originWeek: isDateKey(g.originWeek) ? g.originWeek : '',
     voided: g.voided === true,
+    // Absent, not false, when off — a goal predating checkmarks is scheduled work.
+    checkmark: g.checkmark === true ? true : undefined,
     // Only that exact string. Anything else is a floor, which is the historical behaviour
     // and the safe default — reading an unknown value as a ceiling would invert a goal.
     direction: g.direction === 'atMost' ? 'atMost' : 'atLeast',
@@ -476,6 +572,14 @@ function normalizeCredit(r: unknown): GoalCredit | null {
   const goalId = str(c.goalId);
   const blockId = str(c.blockId);
   if (!goalId || !blockId || !isDateKey(c.date)) return null;
+
+  // A tick carries no minutes, which the old guard rejected outright — the same trap
+  // routine checkmarks hit: it would work perfectly until the next reload and then
+  // silently vanish. The two kinds are validated apart.
+  if (c.checked === true) {
+    return { goalId, blockId, date: c.date, minutes: 0, checked: true };
+  }
+
   if (!isFiniteNum(c.minutes) || c.minutes <= 0) return null;
   return { goalId, blockId, date: c.date, minutes: Math.round(c.minutes) };
 }
@@ -498,6 +602,15 @@ export function loadWeek(weekKey: string): WeekRecord {
     character: characterById(str(parsed.character)) ? str(parsed.character) : undefined,
     draws: normalizeDraws(parsed.draws),
     outcome: normalizeOutcome(parsed.outcome),
+    // Tombstones for weekly goals taken off on purpose. Deduplicated on read and
+    // absent when empty, so a week that has never had one carries no field.
+    dismissed: Array.isArray(parsed.dismissed)
+      ? (() => {
+          const ids = [...new Set(parsed.dismissed.filter((v): v is string =>
+            typeof v === 'string' && v.length > 0))];
+          return ids.length > 0 ? ids : undefined;
+        })()
+      : undefined,
   };
 }
 
@@ -1079,6 +1192,73 @@ export function loadShop(today = toDateKey(new Date())): ShopState {
       : [],
     rerolls,
   };
+}
+
+/**
+ * How long a sealed DERIVED record is kept.
+ *
+ * Five years, and only for records the app can rebuild or has already folded into
+ * something else. Day plans and week records are never pruned by this or anything
+ * else: they are the primary record of what you actually did, and they are also the
+ * bulk of the growth — so this buys headroom rather than solving it, which is the
+ * honest trade. `storeUsage` is what makes the remaining ceiling visible.
+ */
+export const DERIVED_RETENTION_DAYS = 365 * 5;
+
+/**
+ * Drop sealed month and season summaries past the horizon.
+ *
+ * Returns what it removed rather than a count, so the caller can say which records
+ * went. Idempotent: running it twice removes nothing the second time.
+ */
+export function pruneDerivedRecords(
+  today: string,
+  retentionDays = DERIVED_RETENTION_DAYS
+): string[] {
+  const cutoff = addDaysKey(today, -retentionDays);
+  const removed: string[] = [];
+
+  for (const key of listKeys(MONTH_PREFIX)) {
+    // A month key is 'YYYY-MM'; compare against the cutoff's own month so a partial
+    // month is never dropped early.
+    if (!isMonthKey(key) || key >= cutoff.slice(0, 7)) continue;
+    removed.push(MONTH_PREFIX + key);
+  }
+  for (const key of listKeys(SEASON_PREFIX)) {
+    if (key >= cutoff) continue;
+    removed.push(SEASON_PREFIX + key);
+  }
+
+  for (const key of removed) {
+    try {
+      localStorage.removeItem(key);
+    } catch (e) {
+      console.error(`Almanac: could not prune ${key}`, e);
+    }
+  }
+  return removed;
+}
+
+/**
+ * Drop fold-state keys for panels that no longer exist.
+ *
+ * One key per collapsible section, written the first time it is toggled and never
+ * removed. Tiny individually and unbounded in principle, since a renamed panel leaves
+ * its key behind forever. The caller passes the ids currently in use.
+ */
+export function pruneFoldState(liveIds: string[]): number {
+  const live = new Set(liveIds);
+  let dropped = 0;
+  for (const id of listKeys(FOLD_PREFIX)) {
+    if (live.has(id)) continue;
+    try {
+      localStorage.removeItem(FOLD_PREFIX + id);
+      dropped++;
+    } catch {
+      // Best effort — a fold key left behind costs bytes, not correctness.
+    }
+  }
+  return dropped;
 }
 
 export function saveShop(shop: ShopState): void {

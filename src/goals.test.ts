@@ -22,7 +22,15 @@ import {
   goalRunKey,
   goalRunPayouts,
   goalRunXp,
+  addGoalCheck,
+  addGoalToWeek,
+  removeGoalFromWeek,
+  checkmarkable,
+  checkmarkGoals,
+  checksForGoal,
+  goalChecksOn,
   outcomeHistory,
+  removeGoalCheck,
   tallyOutcomes,
   weekOutcome,
 } from './goals';
@@ -1040,5 +1048,199 @@ describe('outcomeHistory', () => {
     expect(outcomeHistory(weeks, 2).map((r) => r.week)).toEqual([
       '2026-01-19', '2026-01-12',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkmark goals — counted, not scheduled
+// ---------------------------------------------------------------------------
+
+describe('checkmark goals', () => {
+  const walk = (over: Partial<WeeklyGoal> = {}): WeeklyGoal =>
+    weekly({ id: 'walk', label: 'Walk', target: 14, targetKind: 'sessions', ...over });
+
+  const D = '2026-08-04';
+
+  it('FIXES the unreachable target: a tick counts individually', () => {
+    // The bug this closes. Sessions were counted by distinct DATE, so a goal of
+    // fourteen a week could never exceed seven — the app accepted the target and then
+    // made it impossible, silently. Two walks on one day must now count as two.
+    let credits: GoalCredit[] = [];
+    credits = addGoalCheck(credits, 'walk', D, 'c1');
+    credits = addGoalCheck(credits, 'walk', D, 'c2');
+    expect(goalProgress(walk(), credits).done).toBe(2);
+  });
+
+  it('reaches fourteen in a week of two a day', () => {
+    let credits: GoalCredit[] = [];
+    for (let d = 3; d <= 9; d++) {
+      const date = `2026-08-0${d}`;
+      credits = addGoalCheck(credits, 'walk', date, `a${d}`);
+      credits = addGoalCheck(credits, 'walk', date, `b${d}`);
+    }
+    const p = goalProgress(walk(), credits);
+    expect(p.done).toBe(14);
+    expect(p.outcome).toBe('met');
+  });
+
+  it('still counts BLOCK credits by date, so chunking is unaffected', () => {
+    // The original rule survives for the case it was written for: a two-hour sitting
+    // split into three blocks is one session, not three.
+    const chunks: GoalCredit[] = [
+      { goalId: 'walk', blockId: 'b1', date: D, minutes: 90 },
+      { goalId: 'walk', blockId: 'b2', date: D, minutes: 90 },
+      { goalId: 'walk', blockId: 'b3', date: D, minutes: 30 },
+    ];
+    expect(goalProgress(walk(), chunks).sessions).toBe(1);
+  });
+
+  it('adds the two counting rules together', () => {
+    const mixed: GoalCredit[] = [
+      { goalId: 'walk', blockId: 'b1', date: D, minutes: 30 },
+      ...addGoalCheck([], 'walk', D, 'c1'),
+    ];
+    expect(goalProgress(walk(), mixed).sessions).toBe(2);
+  });
+
+  it('survives the reconcile that rebuilds a day from its blocks', () => {
+    // Same hazard routine checkmarks had: reconcile runs on any change to the day and
+    // drops everything not derived from a block.
+    const credits = addGoalCheck([], 'walk', D, 'c1');
+    expect(reconcileCredits(credits, D, [])).toHaveLength(1);
+  });
+
+  it('removes exactly one tick, not the whole day', () => {
+    let credits = addGoalCheck([], 'walk', D, 'c1');
+    credits = addGoalCheck(credits, 'walk', D, 'c2');
+    credits = removeGoalCheck(credits, 'walk', D);
+    expect(checksForGoal(credits, 'walk', D)).toBe(1);
+  });
+
+  it('is a no-op when there is nothing to remove', () => {
+    const credits = addGoalCheck([], 'walk', D, 'c1');
+    expect(removeGoalCheck(credits, 'walk', '2026-08-05')).toBe(credits);
+  });
+
+  it('adds no minutes, so a minutes figure never counts a tick', () => {
+    const credits = addGoalCheck([], 'walk', D, 'c1');
+    expect(goalProgress(walk(), credits).minutes).toBe(0);
+  });
+
+  it('keeps checkmarks out of the intake chips', () => {
+    const record = week({ goals: [walk({ checkmark: true }), walk({ id: 'other' })] });
+    expect(openGoals(record).map((p) => p.goal.id)).toEqual(['other']);
+  });
+
+  it('lists only checkmark goals that are not stood down', () => {
+    const record = week({
+      goals: [
+        walk({ checkmark: true }),
+        walk({ id: 'timed' }),
+        walk({ id: 'off', checkmark: true, voided: true }),
+      ],
+    });
+    expect(checkmarkGoals(record).map((g) => g.id)).toEqual(['walk']);
+  });
+
+  it('counts every tick on a day, across goals', () => {
+    let credits = addGoalCheck([], 'walk', D, 'c1');
+    credits = addGoalCheck(credits, 'water', D, 'c2');
+    credits = addGoalCheck(credits, 'walk', '2026-08-05', 'c3');
+    expect(goalChecksOn(credits, D)).toBe(2);
+  });
+});
+
+describe('what may become a checkmark', () => {
+  it('allows a sessions target', () => {
+    expect(checkmarkable(weekly({ targetKind: 'sessions' }))).toBe(true);
+  });
+
+  it('refuses a minutes target, which a tick could never satisfy', () => {
+    expect(checkmarkable(weekly({ targetKind: 'minutes' }))).toBe(false);
+  });
+
+  it('refuses a ceiling — ticking toward a limit is nonsense', () => {
+    expect(checkmarkable(weekly({ targetKind: 'sessions', direction: 'atMost' }))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A deleted weekly goal stays deleted
+// ---------------------------------------------------------------------------
+
+describe('removing a weekly goal', () => {
+  const W_LAST = '2026-07-27';
+  const W_NOW = '2026-08-03';
+  const W_NEXT = '2026-08-10';
+  const walk = (over: Partial<WeeklyGoal> = {}) => weekly({ id: 'walk', label: 'Walk', ...over });
+
+  it('does NOT come back on the next rollover', () => {
+    // The bug: `issueRecurringGoals` copies standing goals forward from the most recent
+    // prior week, so deleting one only removed it until the next launch — the week
+    // behind still held it and it was faithfully reissued.
+    const last = week({ week: W_LAST, goals: [walk()] });
+    const now = removeGoalFromWeek(week({ week: W_NOW, goals: [walk()] }), 'walk');
+
+    expect(now.goals).toEqual([]);
+    expect(now.dismissed).toEqual(['walk']);
+
+    const issued = issueRecurringGoals(W_NOW, [last, now]);
+    expect(issued?.goals.map((g) => g.id) ?? []).toEqual([]);
+  });
+
+  it('stays gone for the weeks after that too', () => {
+    // The tombstone has to outlive the record it was written on, or the goal returns
+    // one week later instead of one launch later.
+    const last = week({ week: W_LAST, goals: [walk()] });
+    const now = removeGoalFromWeek(week({ week: W_NOW, goals: [walk()] }), 'walk');
+    const carried = issueRecurringGoals(W_NOW, [last, now]) ?? now;
+    expect(carried.dismissed).toEqual(['walk']);
+
+    const next = issueRecurringGoals(W_NEXT, [last, carried, week({ week: W_NEXT })]);
+    expect(next?.goals.map((g) => g.id) ?? []).toEqual([]);
+  });
+
+  it('still issues the goals that were NOT removed', () => {
+    const last = week({ week: W_LAST, goals: [walk(), weekly({ id: 'read' })] });
+    const now = removeGoalFromWeek(week({ week: W_NOW, goals: [] }), 'walk');
+    // 'walk' was never in this week, so removing it leaves no tombstone by itself.
+    const withTombstone = { ...now, dismissed: ['walk'] };
+    const issued = issueRecurringGoals(W_NOW, [last, withTombstone]);
+    expect(issued?.goals.map((g) => g.id)).toEqual(['read']);
+  });
+
+  it('comes back when it is added again by hand', () => {
+    const last = week({ week: W_LAST, goals: [walk()] });
+    let now = removeGoalFromWeek(week({ week: W_NOW, goals: [walk()] }), 'walk');
+    now = addGoalToWeek(now, walk());
+
+    expect(now.goals.map((g) => g.id)).toEqual(['walk']);
+    expect(now.dismissed).toBeUndefined();
+    // And the rollover leaves it alone rather than removing it again.
+    expect(issueRecurringGoals(W_NOW, [last, now])?.goals ?? []).toEqual([]);
+  });
+
+  it('drops the tombstone once the goal can no longer be reissued', () => {
+    // Self-pruning: a marker is only worth keeping while the goal is still sitting in
+    // the week behind this one. Otherwise the list grows for the life of the profile.
+    const last = week({ week: W_LAST, goals: [] });
+    const now = { ...week({ week: W_NOW }), dismissed: ['walk'] };
+    const issued = issueRecurringGoals(W_NOW, [last, now]);
+    expect(issued?.dismissed).toBeUndefined();
+  });
+
+  it('leaves no tombstone for a one-off, which is never reissued', () => {
+    const now = removeGoalFromWeek(
+      week({ week: W_NOW, goals: [goal({ id: 'once', cadence: 'oneOff' })] }),
+      'once'
+    );
+    expect(now.goals).toEqual([]);
+    expect(now.dismissed).toBeUndefined();
+  });
+
+  it('is idempotent — removing twice records one tombstone', () => {
+    let w = removeGoalFromWeek(week({ week: W_NOW, goals: [walk()] }), 'walk');
+    w = removeGoalFromWeek(w, 'walk');
+    expect(w.dismissed).toEqual(['walk']);
   });
 });

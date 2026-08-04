@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import type { Block } from '../types';
 import { formatDuration } from '../utils/time';
+import { CHECK_CREDIT_MINUTES, CHECK_CREDIT_SHARE } from '../progress';
 import { EASE_OUT, staggerDelay } from '../utils/motion';
 
 // ============================================================================
@@ -21,6 +22,14 @@ import { EASE_OUT, staggerDelay } from '../utils/motion';
 
 interface Props {
   blocks: Block[];
+  /**
+   * Checkmarks ticked today.
+   *
+   * Contributes to the dial but is bounded, using the SAME rule the streak threshold
+   * uses. Two different definitions of "how much of today is done" — one for the ring,
+   * one for the run — would be the app disagreeing with itself about the same day.
+   */
+  checks?: number;
 }
 
 interface Level {
@@ -63,7 +72,7 @@ function useCountUp(target: number, enabled = true) {
   return value;
 }
 
-function ProgressWheel({ blocks }: Props) {
+function ProgressWheel({ blocks, checks = 0 }: Props) {
   const { doneMinutes, totalMinutes, real } = useMemo(() => {
     const real = blocks.filter((b) => !b.auto);
     let doneMinutes = 0;
@@ -78,10 +87,22 @@ function ProgressWheel({ blocks }: Props) {
   }, [blocks]);
 
   const reduced = useReducedMotion() ?? false;
-  const pct = totalMinutes > 0 ? doneMinutes / totalMinutes : 0;
-  const pctInt = Math.round(pct * 100);
+
+  // Ten minutes of credit a check, ceilinged at 40% of the day. The ceiling is what
+  // keeps this honest: checks can move the dial and lift the label off "Day ahead",
+  // and can never fill it — a day of ticked boxes and no work cannot read as done.
+  const credit = Math.min(
+    checks * CHECK_CREDIT_MINUTES,
+    totalMinutes * CHECK_CREDIT_SHARE
+  );
+  const credited = doneMinutes + credit;
+
+  const pct = totalMinutes > 0 ? credited / totalMinutes : 0;
+  const pctInt = Math.round(Math.min(1, pct) * 100);
   const displayPct = useCountUp(pctInt, !reduced);
-  const level = levelFor(pctInt, doneMinutes);
+  const level = levelFor(pctInt, credited);
+  // Clearing the day is still about the WORK. Checks cannot complete it, which the
+  // ceiling already guarantees — this states it rather than relying on the arithmetic.
   const complete = totalMinutes > 0 && doneMinutes >= totalMinutes;
 
   const size = 104;
@@ -95,8 +116,14 @@ function ProgressWheel({ blocks }: Props) {
       <div className="flex items-baseline justify-between mb-4">
         <span className="legend">Progress</span>
         {/* Time, not counts. */}
+        {/* The MINUTES stay honest. A checkmark is not time, so it never appears in
+            this figure — it is shown alongside instead, which is the only way the dial
+            reading higher than the minutes can make sense to anyone. */}
         <span className="font-mono text-micro text-bone-3 tnum">
           {formatDuration(doneMinutes)} / {formatDuration(totalMinutes)}
+          {credit > 0 && (
+            <span style={{ color: 'var(--signal)' }}> · +{checks}✓</span>
+          )}
         </span>
       </div>
 

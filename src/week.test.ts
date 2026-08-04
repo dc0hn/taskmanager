@@ -14,6 +14,7 @@ import {
   weekdayOf,
   weeksBetween,
 } from './week';
+import { daysBetween } from './utils/time';
 
 describe('weekdayOf', () => {
   it('maps date keys to JS weekday indices', () => {
@@ -221,5 +222,77 @@ describe('month helpers', () => {
     expect(isSameMonth('2026-07-01', '2026-07-31')).toBe(true);
     expect(isSameMonth('2026-07-31', '2026-08-01')).toBe(false);
     expect(isSameMonth('2025-07-01', '2026-07-01')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day-boundary correctness under DST, in both hemispheres
+//
+// `addDays` and `daysBetween` were already covered above. What was not: the functions
+// that go from a date key to a WEEKDAY, which is where a wrong answer silently moves a
+// whole week's records. `toWeekKey` is the anchor for every week record in the app, so
+// an off-by-one here files a Monday's work under the previous week.
+// ---------------------------------------------------------------------------
+
+describe('weekday resolution across DST', () => {
+  // Northern spring forward (US 2026-03-08), northern fall back (US 2026-11-01),
+  // southern spring forward (AU 2026-10-04), southern fall back (AU 2026-04-05).
+  const TRANSITIONS = ['2026-03-08', '2026-11-01', '2026-10-04', '2026-04-05'];
+
+  it('reads the correct weekday on every transition day', () => {
+    // All four are Sundays. If local-midnight construction were rolling the date,
+    // these would come back as Saturday or Monday.
+    for (const d of TRANSITIONS) {
+      expect(weekdayOf(d), d).toBe(0);
+    }
+  });
+
+  it('anchors the week to the right Monday across a transition', () => {
+    // The Sunday of a transition belongs to the week that began six days earlier.
+    expect(toWeekKey('2026-03-08')).toBe('2026-03-02');
+    expect(toWeekKey('2026-11-01')).toBe('2026-10-26');
+    expect(toWeekKey('2026-10-04')).toBe('2026-09-28');
+    expect(toWeekKey('2026-04-05')).toBe('2026-03-30');
+  });
+
+  it('gives a transition week exactly seven distinct dates', () => {
+    // A 23-hour or 25-hour day inside the span must not duplicate or drop one.
+    for (const d of TRANSITIONS) {
+      const dates = weekDates(toWeekKey(d));
+      expect(dates, d).toHaveLength(7);
+      expect(new Set(dates).size, d).toBe(7);
+      expect(dates, d).toContain(d);
+    }
+  });
+
+  it('keeps a transition week seven days wide by the app’s own arithmetic', () => {
+    for (const d of TRANSITIONS) {
+      const key = toWeekKey(d);
+      expect(daysBetween(key, addWeeks(key, 1)), d).toBe(7);
+    }
+  });
+});
+
+describe('day boundaries at the edges of the calendar', () => {
+  it('handles a leap day as an ordinary Tuesday', () => {
+    expect(weekdayOf('2028-02-29')).toBe(2);
+    expect(toWeekKey('2028-02-29')).toBe('2028-02-28');
+  });
+
+  it('crosses a year boundary without losing a week', () => {
+    expect(toWeekKey('2027-01-01')).toBe('2026-12-28');
+    expect(addWeeks('2026-12-28', 1)).toBe('2027-01-04');
+  });
+
+  it('builds a month grid of whole weeks across a transition month', () => {
+    for (const month of ['2026-03-15', '2026-11-15', '2026-10-15', '2026-04-15']) {
+      const grid = monthGridDates(month);
+      expect(grid.length % 7, month).toBe(0);
+      expect(new Set(grid).size, month).toBe(grid.length);
+      // Every cell is one day after the last — no gap, no repeat.
+      for (let i = 1; i < grid.length; i++) {
+        expect(daysBetween(grid[i - 1], grid[i]), `${month} @${i}`).toBe(1);
+      }
+    }
   });
 });

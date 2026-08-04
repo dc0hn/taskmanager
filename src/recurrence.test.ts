@@ -539,3 +539,46 @@ describe('the grace window', () => {
     expect(checkDateFor(at('2027-01-01T02:00:00'))).toBe('2026-12-31');
   });
 });
+
+describe('the grace window and a routine created today', () => {
+  // The bug this pins, found live at 00:21: inside the grace window the strip credited
+  // yesterday, and `templatesDueOn` gates on `createdOn <= date` — so a routine created
+  // TODAY was not due yesterday and vanished from the list entirely. The strip went
+  // empty at exactly the moment someone had finished setting one up.
+  const madeToday = (): RecurringTask => ({
+    id: 'water',
+    label: 'Gallon Of Water',
+    category: 'health',
+    duration: 15,
+    priority: 'normal',
+    rule: { kind: 'daily' },
+    createdOn: '2026-08-04',
+    active: true,
+    checkmark: true,
+  });
+
+  it('is not due on the grace day, which is the trap', () => {
+    expect(checkmarksDueOn([madeToday()], '2026-08-03')).toEqual([]);
+  });
+
+  it('IS due on the real day, which is what must be offered instead', () => {
+    expect(checkmarksDueOn([madeToday()], '2026-08-04')).toHaveLength(1);
+  });
+
+  it('a routine that existed yesterday is due on both, so it can credit either', () => {
+    const older = { ...madeToday(), createdOn: '2026-07-01' };
+    expect(checkmarksDueOn([older], '2026-08-03')).toHaveLength(1);
+    expect(checkmarksDueOn([older], '2026-08-04')).toHaveLength(1);
+  });
+
+  it('the union of both days is never empty when either has it', () => {
+    // The property the strip relies on: an item is offered if it was due on the day
+    // being credited OR on the real day.
+    const templates = [madeToday(), { ...madeToday(), id: 'old', createdOn: '2026-07-01' }];
+    const union = new Set([
+      ...checkmarksDueOn(templates, '2026-08-03').map((t) => t.id),
+      ...checkmarksDueOn(templates, '2026-08-04').map((t) => t.id),
+    ]);
+    expect([...union].sort()).toEqual(['old', 'water']);
+  });
+});

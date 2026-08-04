@@ -5,6 +5,7 @@ import {
   CHECK_XP,
   CHECK_XP_DAILY_CAP,
   CHECK_CREDIT_SHARE,
+  CHECK_CREDIT_MINUTES,
   brassEarned,
   BRASS_PER_XP,
   comboMultiplier,
@@ -1295,5 +1296,114 @@ describe('checkmarks and the streak threshold', () => {
 
   it('never exceeds one', () => {
     expect(dayScore(stat({ plannedMinutes: 100, doneMinutes: 100, checks: 5 }))).toBe(1);
+  });
+});
+
+describe('unchecking gives the XP back', () => {
+  const D = '2026-08-04';
+  const started = { ...emptyProgress(), startedOn: '2026-08-01' };
+
+  it('takes back exactly what it gave', () => {
+    // The reconcile is a DELTA against the day's stored figure, so this needs no
+    // special path — but it is the property the feature rests on, and nothing asserted
+    // it until now.
+    let progress = started;
+    let stats: Record<string, DailyStat> = {};
+
+    let r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 1,
+    });
+    progress = r.progress; stats = r.stats;
+    expect(progress.totalXp).toBe(CHECK_XP);
+
+    r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, NO_MODIFIERS);
+    expect(r.progress.totalXp).toBe(0);
+  });
+
+  it('removes one check without disturbing the others', () => {
+    let progress = started;
+    let stats: Record<string, DailyStat> = {};
+
+    let r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 3,
+    });
+    progress = r.progress; stats = r.stats;
+
+    r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 2,
+    });
+    expect(r.progress.totalXp).toBe(CHECK_XP * 2);
+  });
+
+  it('does not claw back below the cap when unchecking past it', () => {
+    // Nine checks pay the 40 cap, not 72. Dropping to eight must still pay 40, so
+    // unchecking above the cap takes nothing away rather than removing a phantom 8.
+    let progress = started;
+    let stats: Record<string, DailyStat> = {};
+
+    let r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 9,
+    });
+    progress = r.progress; stats = r.stats;
+    expect(progress.totalXp).toBe(CHECK_XP_DAILY_CAP);
+
+    r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 8,
+    });
+    expect(r.progress.totalXp).toBe(CHECK_XP_DAILY_CAP);
+  });
+
+  it('leaves brass and the level alone when a check is undone', () => {
+    const progress = started;
+    const stats: Record<string, DailyStat> = {};
+    let r = reconcileDay(progress, stats, D, [], DEFAULT_CATEGORIES, {
+      ...NO_MODIFIERS, checks: 1,
+    });
+    const brassAfter = r.progress.brass;
+    r = reconcileDay(r.progress, r.stats, D, [], DEFAULT_CATEGORIES, NO_MODIFIERS);
+    expect(r.progress.brass).toBeLessThanOrEqual(brassAfter);
+    expect(r.progress.totalXp).toBe(0);
+  });
+});
+
+describe('what checks are worth on the day’s dial', () => {
+  // The dial and the streak threshold read the same credit, so the app cannot show a
+  // ring past the line while the run says the day fell short.
+  const credited = (done: number, planned: number, checks: number) => {
+    const credit = Math.min(checks * CHECK_CREDIT_MINUTES, planned * CHECK_CREDIT_SHARE);
+    return planned > 0 ? Math.min(1, (done + credit) / planned) : 0;
+  };
+
+  it('moves the dial off zero', () => {
+    expect(credited(0, 300, 0)).toBe(0);
+    expect(credited(0, 300, 3)).toBeCloseTo(0.1, 5);
+  });
+
+  it('CANNOT fill it, however many are ticked', () => {
+    // A day of ticked boxes and no work must never read as done.
+    for (const checks of [5, 20, 500]) {
+      expect(credited(0, 300, checks), `${checks}`).toBeLessThanOrEqual(CHECK_CREDIT_SHARE);
+    }
+  });
+
+  it('cannot fill a tiny day either', () => {
+    expect(credited(0, 15, 10)).toBeCloseTo(CHECK_CREDIT_SHARE, 5);
+  });
+
+  it('tops out at one when the work itself is done', () => {
+    expect(credited(300, 300, 5)).toBe(1);
+  });
+
+  it('contributes nothing when nothing is planned, so an empty day stays empty', () => {
+    expect(credited(0, 0, 5)).toBe(0);
+  });
+
+  it('agrees exactly with dayScore, which is the point', () => {
+    const stat: DailyStat = {
+      date: '2026-08-04', plannedMinutes: 300, doneMinutes: 150, xpEarned: 0,
+      brassEarned: 0, bestCombo: 0, cleared: false, completedCount: 0,
+      focusMinutes: 0, checks: 3,
+    };
+    expect(credited(150, 300, 3)).toBeCloseTo(dayScore(stat), 10);
   });
 });
